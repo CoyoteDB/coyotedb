@@ -1,0 +1,113 @@
+# CoyoteDB demo: 3 database nodes + 1 witness on ONE machine.
+#
+#   docker compose -f docker/docker-compose.yml up -d --build
+#   docker compose -f docker/docker-compose.yml exec node1 coyote status
+#
+# Good for trying it out and for development. It does not protect you from
+# this machine dying: for that, run one node per machine (docker/README.md).
+#
+# Apps on this machine connect to localhost:5432, 5433 or 5434 (any of
+# them reaches the main node). Get the password and certificate with:
+#
+#   docker compose -f docker/docker-compose.yml exec node1 coyote conninfo
+#   docker compose -f docker/docker-compose.yml cp node1:/data/coyote/ca.crt .
+#
+# Remove everything, data included:
+#
+#   docker compose -f docker/docker-compose.yml down -v
+
+name: coyote-demo
+
+x-node: &node
+  image: ${COYOTE_IMAGE:-coyotedb/coyote:local}
+  restart: unless-stopped
+  # coyote shuts PostgreSQL down cleanly on SIGTERM; give it the time
+  # (Docker's default is 10 s, then SIGKILL).
+  stop_grace_period: 2m
+  shm_size: 256m
+
+services:
+  node1:
+    <<: *node
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: node1
+    command: ["up", "--name", "node1", "--advertise", "node1:7481"]
+    ports:
+      - "127.0.0.1:${COYOTE_PORT_NODE1:-5432}:5432"
+    volumes:
+      - node1-data:/data
+
+  # One-shot helper: asks node1 for one invite code per joining node (each
+  # code works once) and leaves them in the "invites" volume. It shares
+  # node1's network and data folder, because `coyote invite` talks to the
+  # node over its local-only control port.
+  invites:
+    image: ${COYOTE_IMAGE:-coyotedb/coyote:local}
+    network_mode: "service:node1"
+    depends_on:
+      node1:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for n in node2 node3 witness; do
+          [ -s /invites/$$n ] && continue
+          until coyote invite --ttl 24h | grep '^coyote-' > /invites/$$n.tmp; do sleep 2; done
+          mv /invites/$$n.tmp /invites/$$n
+        done
+    volumes:
+      - node1-data:/data
+      - invites:/invites
+
+  node2:
+    <<: *node
+    hostname: node2
+    depends_on:
+      invites:
+        condition: service_completed_successfully
+    entrypoint: ["/usr/bin/tini", "--", "/bin/sh", "-c"]
+    command: ['exec coyote join --invite-file /invites/node2 --name node2 --advertise node2:7481']
+    ports:
+      - "127.0.0.1:${COYOTE_PORT_NODE2:-5433}:5432"
+    volumes:
+      - node2-data:/data
+      - invites:/invites:ro
+
+  node3:
+    <<: *node
+    hostname: node3
+    depends_on:
+      invites:
+        condition: service_completed_successfully
+    entrypoint: ["/usr/bin/tini", "--", "/bin/sh", "-c"]
+    command: ['exec coyote join --invite-file /invites/node3 --name node3 --advertise node3:7481']
+    ports:
+      - "127.0.0.1:${COYOTE_PORT_NODE3:-5434}:5432"
+    volumes:
+      - node3-data:/data
+      - invites:/invites:ro
+
+  # A witness votes but keeps no data: with it, losing any one of the
+  # four still leaves a majority.
+  witness:
+    <<: *node
+    hostname: witness
+    depends_on:
+      invites:
+        condition: service_completed_successfully
+    entrypoint: ["/usr/bin/tini", "--", "/bin/sh", "-c"]
+    command: ['exec coyote witness --invite-file /invites/witness --name witness --advertise witness:7481']
+    volumes:
+      - witness-data:/data
+      - invites:/invites:ro
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+  witness-data:
+  invites:

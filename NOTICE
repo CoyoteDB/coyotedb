@@ -1,0 +1,15 @@
+CoyoteDB
+Copyright 2026 The CoyoteDB Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+CoyoteDB runs PostgreSQL, which it downloads (or, in the Docker image,
+includes) unchanged. PostgreSQL is released under the PostgreSQL License:
+Portions Copyright (c) 1996-2026, The PostgreSQL Global Development Group;
+Portions Copyright (c) 1994, The Regents of the University of California.
+
+The coyote program includes Go modules under their own licences, among
+them hashicorp/raft and hashicorp/raft-boltdb (Mozilla Public License 2.0;
+their source is available from github.com/hashicorp), go-hclog (MIT), pgx (MIT),
+bbolt (MIT), kardianos/service (zlib) and golang.org/x/sys (BSD-3-Clause).
+When the pgvector extension is installed, it is under the PostgreSQL License.

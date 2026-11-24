@@ -1,0 +1,1 @@
+({FUNCEXPR :funcid 1347 :funcresulttype 701 :funcretset false :funcvariadic false :funcformat 0 :funccollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 1 :vartype 701 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location -1}) :location -1})

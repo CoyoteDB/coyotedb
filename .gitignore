@@ -1,0 +1,32 @@
+# build output
+/bin/
+/dist/
+
+# local dev data (Postgres downloads, data dirs, certs)
+.coyote-dev/
+*.coyote-data/
+
+# secrets: never commit
+.env
+.env.*
+*.pem
+*.key
+*.token
+
+node_modules/
+dashboard/dist/*
+!dashboard/dist/.gitkeep
+
+# tooling / OS
+.DS_Store
+Thumbs.db
+*.log
+*.test
+*.out
+coverage.*
+.idea/
+.vscode/
+
+# a stray "go build ./cmd/coyote" in the repo root
+/coyote
+/coyote.exe

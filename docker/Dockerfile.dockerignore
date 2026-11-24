@@ -1,0 +1,15 @@
+# Build context is the repository root; only these paths are sent.
+# (BuildKit reads this file because it sits next to docker/Dockerfile.)
+*
+!go.mod
+!go.sum
+!LICENSE
+!NOTICE
+!cmd/
+!internal/
+!dashboard/embed.go
+!dashboard/dist/
+!docker/pgfetch/
+!docker/extensions/
+**/*_test.go
+**/testdata/
