@@ -35,7 +35,73 @@ container never downloads anything when it starts.
 Ubuntu's `docker.io` package has no BuildKit; the build still works there
 (the classic builder), for the processor of that machine.
 
-## 2. First machine: start a new cluster
+## 2. Easiest: the setup page
+
+On each machine, start the container with `setup`. It needs no address and
+no invite code on the command line: you give those on the page.
+
+```bash
+docker run -d --name coyote --restart unless-stopped \
+  --stop-timeout 120 --shm-size 256m \
+  -p 127.0.0.1:7480:7480 -p 7481:7481 -p 5432:5432 -v coyote-data:/data \
+  coyotedb/coyote:local setup
+```
+
+Then get the sign-in link and open it in a browser **on this machine**:
+
+```bash
+docker logs coyote                     # shows the link (works once, for 2 minutes)
+docker exec coyote coyote dashboard    # a fresh link, any time
+```
+
+The page asks: start a new database, or join one (paste an invite code
+made on a machine that is already in the cluster: "Add a computer" in its
+control panel, or `docker exec coyote coyote invite`). Then a name, backups
+(new database only) and **this machine's address**: coyote runs inside
+Docker and cannot see it, so the page leaves Docker's own addresses
+(`172.17.x.x`) out and asks you to type the machine's LAN address
+(`192.168.1.10`) or its Tailscale address (`100.x.y.z`). It refuses
+`127.0.0.1` and the container's own address, which other machines cannot
+reach.
+
+Leave the command as it is: when Docker restarts the container (or you run
+the same command again on the same volume), `setup` sees the node is
+already set up and just starts it.
+
+**The control panel** stays at `http://127.0.0.1:7480` on this machine.
+Sign in with a fresh link from `docker exec coyote coyote dashboard`.
+
+How it is kept safe (D52, D68): the port is published on the host's
+`127.0.0.1` only, so no other computer can reach it; nothing gets in
+without a one-time sign-in link (single use, 2 minutes), which only a
+command inside the container can make; the page is plain HTTP, which is
+why it must never be published on `0.0.0.0` (`-p 7480:7480`). Inside the
+container the page listens on `0.0.0.0:7480` because the image sets
+`COYOTE_DASHBOARD_LISTEN=0.0.0.0:7480`; coyote uses that only inside a
+container on Docker's own network (not with `--network host`). To switch
+it off: `-e COYOTE_DASHBOARD_LISTEN=` (then there is no page from the host;
+use the command line below).
+
+**The panel from another computer:** do not publish the port wider. Use an
+SSH tunnel from that computer, then open the link there:
+
+```bash
+ssh -L 7480:127.0.0.1:7480 you@this-machine
+# in that SSH session: docker exec coyote coyote dashboard
+```
+
+With Tailscale on both computers, the same tunnel works over the Tailscale
+address (`ssh -L 7480:127.0.0.1:7480 you@100.x.y.z`).
+
+**The sign-in link is in `docker logs`.** Anyone who can read this
+container's logs (Docker's log files on this machine, or a log collector
+you set up) sees it. It is still of no use to them: it works once, for 2
+minutes, and only from a browser on this machine. If you would rather no
+link ever reached the logs, use the command line way below: `up`, `join`
+and `witness` print none, and `docker exec coyote coyote dashboard` prints
+one only to your terminal.
+
+## 3. The command line way: first machine
 
 Replace `192.168.1.10` with an address of **this machine** that the other
 machines can reach (its LAN address, or its Tailscale address `100.x.y.z`).
@@ -53,7 +119,7 @@ Then get an invite code for the next machine (it works once, for one hour):
 docker exec coyote coyote invite
 ```
 
-## 3. Each other machine: join
+## 4. The command line way: each other machine
 
 ```bash
 docker run -d --name coyote --restart unless-stopped \
@@ -78,7 +144,7 @@ Leave the command as it is: when Docker restarts the container, `join` and
 `COYOTE_INVITE` (or `--invite-file FILE` from a mounted file), not on the
 command line, where other programs could read it.
 
-## 4. Use it
+## 5. Use it
 
 ```bash
 docker exec coyote coyote status            # who is the main node, copies healthy?
@@ -110,7 +176,8 @@ Remove it all, data included: `docker compose -f docker/docker-compose.yml down 
 
 ## Things to know
 
-**The address (`--advertise`, or `COYOTE_ADVERTISE`) must be given.**
+**The address (`--advertise`, or `COYOTE_ADVERTISE`) must be given** (the
+setup page asks for it instead).
 Inside a container, coyote only sees the container's private Docker address
 (like `172.17.0.5`), which other machines cannot reach; it notices it runs
 in a container and refuses to start a new node on such an address, with
@@ -148,10 +215,6 @@ seconds, which is why the commands above say `--stop-timeout 120`. Docker
 Desktop on a laptop: a sleeping computer cannot keep its lease, so another
 node takes over while it sleeps; it rejoins when it wakes.
 
-**The dashboard is not reachable from outside the container yet.** It only
-answers on the container's own loopback. Use the command line through
-`docker exec`.
-
 **Tailscale.** Easiest: Tailscale on the host, and `--advertise` the host's
 Tailscale address (`100.x.y.z:7481`); the `-p` ports are reachable on it.
 Without Tailscale on the host, run the official `tailscale/tailscale`
@@ -183,14 +246,17 @@ uses the tested `-p` path.)
   image has no pgvector. The archives are not in the repository.
 - Runs as user `coyote` (uid 10001), never root. Data folder
   `/data/coyote` (the `/data` volume).
-- Ports: 7481 (cluster, mutual TLS) and 5432 (apps, TLS). PostgreSQL itself
-  listens on 127.0.0.1 inside the container only.
-- Health check: `coyote status`.
+- Ports: 7481 (cluster, mutual TLS), 5432 (apps, TLS) and 7480 (setup page
+  and control panel, plain HTTP with a one-time sign-in; publish on
+  `127.0.0.1` only). PostgreSQL itself listens on 127.0.0.1 inside the
+  container only.
+- Default command: `setup` (D68): the setup page on an empty volume, the
+  node itself on a volume that is already set up.
+- Health check: `coyote status` (healthy while waiting for the setup page).
 
-**The dashboard from the host.** Add `-p 127.0.0.1:7480:7480` to the run
-line and `--dashboard-listen 0.0.0.0:7480` after `up` / `join` / `witness`,
-then get a sign-in link with `docker exec coyote coyote dashboard --no-open`
-and open it in a browser on the host. Publish it on `127.0.0.1` only, never
-`-p 7480:7480`: the sign-in travels as plain HTTP. Only a browser on the
-host gets in (the link works once, for 2 minutes); the command-line control
-of the node stays inside the container (D52).
+**The control panel with the command line way.** Add
+`-p 127.0.0.1:7480:7480` to the `up` / `join` / `witness` run lines above
+and sign in with `docker exec coyote coyote dashboard`. The image already
+listens on the container's port 7480 (`COYOTE_DASHBOARD_LISTEN`, see
+section 2). Publish it on `127.0.0.1` only, never `-p 7480:7480`. The
+command-line control of the node stays inside the container (D52).

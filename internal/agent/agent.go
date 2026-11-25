@@ -354,6 +354,10 @@ func (a *Agent) runMember(ctx context.Context) error {
 		return err
 	}
 	defer ports.close()
+	if kind, ok := a.inContainerBridge(); ok {
+		a.say("Control panel: http://127.0.0.1:%d on the computer that runs this %s container (published as -p 127.0.0.1:%d:%d). "+
+			"Sign in with the link from: docker exec CONTAINER %s dashboard", a.ctlPort, kind, a.ctlPort, a.ctlPort, brand.Command)
+	}
 
 	// 3. Postgres program files and the process guard (data nodes only).
 	var plat cluster.Platform

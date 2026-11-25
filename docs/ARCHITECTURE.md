@@ -247,7 +247,7 @@ the node warns under 1 GB free.
 | Port | Use | Bind |
 |---|---|---|
 | 5432 | Postgres proxy for clients | all interfaces chosen at setup |
-| 7480 | HTTP API + dashboard | 127.0.0.1 only; `--dashboard-listen` (containers, D52) binds another address but lets only private-address browsers in with a session |
+| 7480 | HTTP API + dashboard | 127.0.0.1 only; `--dashboard-listen` (containers, D52) binds another address but lets only private-address browsers in with a session. The Docker image sets `COYOTE_DASHBOARD_LISTEN=0.0.0.0:7480`, used only in a container on its own network (D68); docs publish it as `-p 127.0.0.1:7480:7480` only |
 | 7481 | Agent-to-agent (Raft + replication tunnel), mTLS | chosen interfaces |
 | 7432 | The real Postgres | 127.0.0.1 only |
 

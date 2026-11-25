@@ -19,7 +19,31 @@ There is no `latest` tag until the first release, so always give a tag.
 
 **Runs on:** 64-bit Intel/AMD computers (amd64): Linux with Docker, or Windows with Docker Desktop. Not on ARM yet (Raspberry Pi, Apple silicon Macs).
 
-## 1. First machine: start a new cluster
+## Easiest: the setup page
+
+Run this on each machine:
+
+```bash
+docker run -d --name coyote --restart unless-stopped \
+  --stop-timeout 120 --shm-size 256m \
+  -p 127.0.0.1:7480:7480 -p 7481:7481 -p 5432:5432 -v coyote-data:/data \
+  coyotedb/coyote:edge setup
+```
+
+Get the sign-in link and open it in a browser on the same machine:
+
+```bash
+docker logs coyote                    # the link (works once, for 2 minutes)
+docker exec coyote coyote dashboard   # a fresh link, any time
+```
+
+The page lets you start a new database, or join one with an invite code from a machine already in it. It asks for **this machine's address** (its LAN address like `192.168.1.10`, or its Tailscale address `100.x.y.z`): inside Docker coyote cannot see it, so it does not guess.
+
+Afterwards the same container keeps running the node, also after restarts. The control panel stays at `http://127.0.0.1:7480`; sign in with `docker exec coyote coyote dashboard`.
+
+**Keep `-p 127.0.0.1:7480:7480` exactly like that.** The page is plain HTTP behind a one-time sign-in link; never publish it as `-p 7480:7480`. From another computer, use an SSH tunnel: `ssh -L 7480:127.0.0.1:7480 you@this-machine`.
+
+## Or the command line: first machine
 
 Replace `192.168.1.10` with an address of **this machine** that the other machines can reach (its LAN address, or its Tailscale address `100.x.y.z`).
 
@@ -36,7 +60,7 @@ Get an invite code for the next machine (it works once, for one hour):
 docker exec coyote coyote invite
 ```
 
-## 2. Each other machine: join
+## Each other machine: join
 
 ```bash
 docker run -d --name coyote --restart unless-stopped \
@@ -57,7 +81,7 @@ docker run -d --name coyote-witness --restart unless-stopped \
 
 Leave the commands as they are: when Docker restarts a container, it sees the node has already joined and just starts it. Put the code in `COYOTE_INVITE`, not on the command line, where other programs could read it.
 
-## 3. Use it
+## Use it
 
 ```bash
 docker exec coyote coyote status       # which node is the main one, are the copies healthy
@@ -69,8 +93,8 @@ Point your app at the connection string, with `sslrootcert` set to the `ca.crt` 
 
 ## Things to know
 
-- **Give the address** (`--advertise`, or `COYOTE_ADVERTISE`). Inside a container, coyote only sees Docker's private address, which other machines cannot reach. It notices this and refuses to guess.
-- **Keep the ports the same** inside and outside (`-p 7481:7481 -p 5432:5432`).
+- **Give the address** (`--advertise`, or `COYOTE_ADVERTISE`, or on the setup page). Inside a container, coyote only sees Docker's private address, which other machines cannot reach. It notices this and refuses to guess.
+- **Keep the ports the same** inside and outside (`-p 7481:7481 -p 5432:5432`). Port 7480 (setup page, control panel) on `127.0.0.1` only.
 - **Use a named volume** (`-v coyote-data:/data`) for the data, not a folder from your Mac or PC.
 - **Let it stop cleanly.** `--stop-timeout 120` gives PostgreSQL time to shut down.
 - PostgreSQL 18 is inside the image, checked against a pinned checksum, so nothing downloads when a container starts.

@@ -16,6 +16,7 @@ import (
 	"coyotedb.com/coyote/internal/cluster"
 	"coyotedb.com/coyote/internal/control"
 	"coyotedb.com/coyote/internal/invite"
+	"coyotedb.com/coyote/internal/netdetect"
 	"coyotedb.com/coyote/internal/pg"
 )
 
@@ -351,3 +352,82 @@ func atoiT(t *testing.T, s string) int {
 }
 
 var _ = httptest.NewRecorder
+
+// TestSetupInContainer: inside a container the setup page never offers or
+// takes an address only the container has (D68).
+func TestSetupInContainer(t *testing.T) {
+	t.Setenv(netdetect.TestContainerEnv, "docker")
+	dir := t.TempDir()
+	node, err := pg.NewNode(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := loadStateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{cfg: Config{Version: "test"}, node: node, st: st, log: slog.New(slog.DiscardHandler), out: &printer{w: io.Discard}, setup: newSetupTracker(), ctlPort: 7480}
+	s := newSessionStore(7480)
+	reqs := make(chan setupRequest, 1)
+	ctl, err := control.Listen(0, "tok", a.newSetupDash(s, reqs), nil, control.WithBrowserSession(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctl.Close()
+	s.port = atoiT(t, strings.TrimPrefix(ctl.Addr(), "127.0.0.1:"))
+	base := "http://" + ctl.Addr()
+	do := func(method, path, body string, hdr map[string]string) (int, []byte, http.Header) {
+		req, _ := http.NewRequest(method, base+path, strings.NewReader(body))
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, b, resp.Header
+	}
+	tok, _, _ := s.mintLogin()
+	code, b, h := do("POST", "/v1/session", `{"token":"`+tok+`"}`, map[string]string{"Origin": base})
+	if code != 200 {
+		t.Fatalf("sign in: %d %s", code, b)
+	}
+	var sb SessionBody
+	_ = json.Unmarshal(b, &sb)
+	cookie := strings.Split(h.Get("Set-Cookie"), ";")[0]
+	post := map[string]string{"Cookie": cookie, "Origin": base, control.CSRFHeader: sb.CSRFToken, "Content-Type": "application/json"}
+
+	code, b, _ = do("GET", "/v1/addresses", "", map[string]string{"Cookie": cookie})
+	var av AddressesView
+	if code != 200 || json.Unmarshal(b, &av) != nil || av.Container == nil || av.Container.Kind != "docker" {
+		t.Fatalf("addresses: %d %s", code, b)
+	}
+	for _, x := range av.Addresses {
+		if x.Addr.IsLoopback() || netdetect.ContainerPrivate(x.Addr) {
+			t.Fatalf("offered %s inside a container: %s", x.Addr, b)
+		}
+	}
+	for _, adv := range []string{"127.0.0.1", "localhost:7481x", "[::1]:7481"} {
+		code, b, _ := do("POST", "/v1/setup/create", `{"name":"a","advertise":"`+adv+`"}`, post)
+		if adv == "localhost:7481x" {
+			if code != 400 {
+				t.Fatalf("%s: %d %s", adv, code, b)
+			}
+			continue
+		}
+		if code != 422 || !strings.Contains(string(b), `"container_address"`) || !strings.Contains(string(b), "computer that runs Docker") {
+			t.Fatalf("%s: %d %s", adv, code, b)
+		}
+	}
+	if v := a.setup.view(""); v.State != "fresh" {
+		t.Fatalf("a refused address started something: %+v", v)
+	}
+	if code, b, _ := do("POST", "/v1/setup/create", `{"name":"a","advertise":"192.0.2.10"}`, post); code != 202 {
+		t.Fatalf("host address: %d %s", code, b)
+	}
+	if r := <-reqs; len(r.adv) != 1 || r.adv[0] != "192.0.2.10:7481" {
+		t.Fatalf("request: %+v", r)
+	}
+}

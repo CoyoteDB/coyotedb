@@ -363,10 +363,10 @@ code, kbd, pre, samp { font-family: var(--font-mono); }
 .choice:hover { border-color: var(--muted); }
 .choice:has(input:checked) { border-color: var(--ink); background: var(--paper-2); box-shadow: inset 0 0 0 1px var(--ink); }
 .choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
-.choice input { appearance: none; margin: 3px 0 0; width: 20px; height: 20px; border: 1.5px solid var(--muted); border-radius: 50%; background: var(--surface); display: grid; place-items: center; }
-.choice input:checked { border-color: var(--ink); }
-.choice input:checked::after { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
-.choice input:focus-visible { outline: none; }
+.choice input:is([type='radio'], [type='checkbox']) { appearance: none; margin: 3px 0 0; width: 20px; height: 20px; border: 1.5px solid var(--muted); border-radius: 50%; background: var(--surface); display: grid; place-items: center; }
+.choice input:is([type='radio'], [type='checkbox']):checked { border-color: var(--ink); }
+.choice input:is([type='radio'], [type='checkbox']):checked::after { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.choice input:is([type='radio'], [type='checkbox']):focus-visible { outline: none; }
 .choice .c-title { font-weight: 600; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .choice .c-body { grid-column: 2; color: var(--ink-2); font-size: 0.93rem; margin: 0; }
 .choice .c-body p { margin: 4px 0 0; }

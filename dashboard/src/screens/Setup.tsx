@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api, ApiError, errorCode, errorMessage } from '../api/client';
 import type { Address, Addresses, ApiErrorBody, InviteCheck, InviteResponse, Platform, Role, Setup as SetupT, Step } from '../api/types';
 import * as I from '../components/icons';
+import { DockerJoinSteps } from '../components/DockerJoin';
 import { Busy, CodeBlock, CopyButton, Eyebrow, Logo, Notice, useNow } from '../components/ui';
 import { hasFeature } from '../lib/features';
 import { clock, platformLabel, until } from '../lib/format';
@@ -195,7 +196,9 @@ export function Setup() {
         </div>
       </main>
       <footer class="setup-foot">
-        CoyoteDB runs real PostgreSQL on your own computers. Nothing here talks to the internet except the PostgreSQL download, and the cloud storage you pick for backups.
+        {version?.container
+          ? 'CoyoteDB runs real PostgreSQL on your own computers. PostgreSQL is part of this Docker image, so nothing is downloaded: nothing here talks to the internet except the cloud storage you pick for backups.'
+          : 'CoyoteDB runs real PostgreSQL on your own computers. Nothing here talks to the internet except the PostgreSQL download, and the cloud storage you pick for backups.'}
       </footer>
     </div>
   );
@@ -265,6 +268,8 @@ function InviteStep(p: {
   onNext: () => void;
 }) {
   const now = useNow(15000);
+  // The code comes from another computer; in Docker that one most likely runs in Docker too (D68).
+  const inDocker = !!useStore(store, (s) => s.version)?.container;
   const local: InviteResult = useMemo(() => decodeInvite(p.code, now), [p.code, now]);
   const [check, setCheck] = useState<InviteCheck | null>(null);
   const [checking, setChecking] = useState(false);
@@ -318,7 +323,14 @@ function InviteStep(p: {
       <h1>Paste the invite code</h1>
       <p class="lede">
         On a computer that is already part of your database, open its dashboard and choose <strong>Add a computer</strong>, or run{' '}
-        <code>coyote invite</code>. Copy the code it shows and paste it here.
+        <code>coyote invite</code>
+        {inDocker && (
+          <>
+            {' '}
+            (in Docker: <code>docker exec coyote coyote invite</code>)
+          </>
+        )}
+        . Copy the code it shows and paste it here.
       </p>
       <div class="field" style={{ marginTop: '24px' }}>
         <label for="invite">Invite code</label>
@@ -373,7 +385,7 @@ function InviteStep(p: {
               {probe?.message ||
                 'A computer answered, but it is not the cluster this code was made for, so nothing was sent to it. Check that the code is the newest one, or make a new invite.'}
             </p>
-            <p>On a computer in your cluster, make a new invite (Add a computer in its dashboard, or run <code>coyote invite</code>) and paste that code here.</p>
+            <p>On a computer in your cluster, make a new invite (Add a computer in its dashboard, or run <code>{inDocker ? 'docker exec coyote coyote invite' : 'coyote invite'}</code>) and paste that code here.</p>
             {recheck}
           </Notice>
         </div>
@@ -595,7 +607,14 @@ function AddressStep(p: {
   const other = data?.addresses.filter((a) => !a.suggested) ?? [];
   const pickedOther = other.some((a) => a.addr === p.addr);
   const value = custom ? customVal.trim() : p.addr;
-  const customProblem = custom && customVal.trim() && !/^[A-Za-z0-9.:_-]+$/.test(customVal.trim()) ? 'Type an IP address or a host name, without a port.' : '';
+  const ctr = data?.container ?? null;
+  const customProblem = !custom || !customVal.trim()
+    ? ''
+    : !/^[A-Za-z0-9.:_-]+$/.test(customVal.trim())
+      ? 'Type an IP address or a host name, without a port.'
+      : ctr && /^(127\.|localhost$|0\.0\.0\.0$|::1?$)/i.test(customVal.trim())
+        ? 'That address only reaches this container. Type the address other computers use to reach the computer that runs Docker.'
+        : '';
   const ready = !!value && !customProblem && !p.starting;
 
   return (
@@ -608,9 +627,15 @@ function AddressStep(p: {
     >
       <Eyebrow>{p.path === 'create' ? 'New database' : 'Join a cluster'}</Eyebrow>
       <h1>How will the other computers reach this one?</h1>
-      <p class="lede">
-        Pick the address your other computers will use. If they are all on Tailscale, pick Tailscale: it keeps working when you move between networks.
-      </p>
+      {ctr ? (
+        <p class="lede">
+          CoyoteDB runs inside Docker here, so it cannot see this computer’s real address. Type the address of the computer that runs Docker: its address on your network, or its Tailscale address.
+        </p>
+      ) : (
+        <p class="lede">
+          Pick the address your other computers will use. If they are all on Tailscale, pick Tailscale: it keeps working when you move between networks.
+        </p>
+      )}
       {err && (
         <Notice kind="bad" title="Could not list this computer’s addresses">
           <p>{err}</p>
@@ -622,6 +647,7 @@ function AddressStep(p: {
       {!data && !err && <div class="skeleton" style={{ height: '140px', marginTop: '24px' }} aria-label="Finding addresses" />}
       {data && (
         <div style={{ marginTop: '24px' }}>
+          {ctr && <ContainerHelp />}
           {data.warnings?.map((w) => (
             <div key={w} style={{ marginBottom: '12px' }}>
               <Notice kind="warn">
@@ -649,13 +675,21 @@ function AddressStep(p: {
               )}
               <label class="choice">
                 <input type="radio" name="addr" checked={custom} onChange={() => setCustom(true)} />
-                <span class="c-title">Type an address or host name</span>
+                <span class="c-title">{ctr ? 'This computer’s address' : 'Type an address or host name'}</span>
                 <div class="c-body">
-                  For a name your network knows, like <code>office-mini.local</code> or a Tailscale name.
+                  {ctr ? (
+                    <>
+                      Its address on your network (like <code>192.168.1.10</code>), its Tailscale address (<code>100.x.y.z</code>), or a name your network knows.
+                    </>
+                  ) : (
+                    <>
+                      For a name your network knows, like <code>office-mini.local</code> or a Tailscale name.
+                    </>
+                  )}
                   {custom && (
                     <div class="field" style={{ marginTop: '10px' }}>
                       <label class="visually-hidden" for="custom-addr">Address or host name</label>
-                      <input id="custom-addr" class="input mono" value={customVal} onInput={(e) => setCustomVal(e.currentTarget.value)} placeholder="office-mini.local" autoCapitalize="off" spellcheck={false} aria-invalid={customProblem ? 'true' : undefined} />
+                      <input id="custom-addr" class="input mono" value={customVal} onInput={(e) => setCustomVal(e.currentTarget.value)} placeholder={ctr ? '192.168.1.10' : 'office-mini.local'} autoCapitalize="off" spellcheck={false} aria-invalid={customProblem ? 'true' : undefined} />
                       {customProblem && <p class="error"><I.Warn />{customProblem}</p>}
                     </div>
                   )}
@@ -691,6 +725,34 @@ function AddressStep(p: {
   );
 }
 
+// Inside a container (D68): how to find the host's address, and the ports
+// the other computers and apps need published.
+function ContainerHelp() {
+  return (
+    <div style={{ marginBottom: '16px' }}>
+      <Notice kind="info" title="Finding this computer’s address">
+        <ul class="consequences" style={{ margin: '6px 0 0' }}>
+          <li>
+            Mac: <code>ipconfig getifaddr en0</code> in Terminal (Wi-Fi or the first network port).
+          </li>
+          <li>
+            Windows: <code>ipconfig</code>, the “IPv4 Address” line.
+          </li>
+          <li>
+            Linux: <code>hostname -I</code>, usually the first address.
+          </li>
+          <li>
+            Tailscale: <code>tailscale ip -4</code>, or the address the Tailscale app shows.
+          </li>
+        </ul>
+        <p class="muted small" style={{ marginTop: '8px' }}>
+          Other computers reach this one on port 7481 and apps on 5432, so the container must publish both (<code>-p 7481:7481 -p 5432:5432</code>). Docker’s own addresses (like 172.17.0.2) are left out: other computers cannot reach them.
+        </p>
+      </Notice>
+    </div>
+  );
+}
+
 function StepIcon({ s }: { s: Step }) {
   switch (s.state) {
     case 'done':
@@ -709,6 +771,7 @@ function StepIcon({ s }: { s: Step }) {
 function ProgressStep({ setup, code, busy, onAction, backups }: { setup: SetupT; code: string; busy: boolean; onAction: (a: FailAction) => Promise<void>; backups: boolean }) {
   const pr = setup.progress;
   const role = pr?.role ?? setup.role ?? 'data';
+  const inImage = !!useStore(store, (s) => s.version)?.container;
   const done = setup.state === 'member';
   const failed = setup.state === 'failed';
   const op = pr?.operation ?? (setup.error?.code === 'unfinished_join' ? 'join' : 'create');
@@ -742,7 +805,7 @@ function ProgressStep({ setup, code, busy, onAction, backups }: { setup: SetupT;
       <h1>{head}</h1>
       {!done && !failed && (
         <p class="lede" aria-live="polite">
-          {active ? `${stepLabel(active, role)}…` : 'Getting ready…'} You can close this page: it carries on while CoyoteDB runs on this computer.
+          {active ? `${stepLabel(active, role, inImage)}…` : 'Getting ready…'} You can close this page: it carries on while CoyoteDB runs on this computer.
         </p>
       )}
       {failed && err && (
@@ -762,19 +825,19 @@ function ProgressStep({ setup, code, busy, onAction, backups }: { setup: SetupT;
         <div class="panel" style={{ marginTop: '20px' }}>
           <ol class="steps">
             {pr.steps.map((s) => {
-              const d = stepDetail(s);
+              const d = stepDetail(s, inImage);
               const pct = s.percent ?? (s.bytes_total ? Math.floor(((s.bytes_done ?? 0) / s.bytes_total) * 100) : null);
               return (
                 <li key={s.id} class={s.state} aria-current={s.state === 'active' ? 'step' : undefined}>
                   <span class="s-icon"><StepIcon s={s} /></span>
                   <div>
                     <div class="s-label">
-                      {stepLabel(s, role)}
+                      {stepLabel(s, role, inImage)}
                       {s.id === 'copy' && pr.from ? <span class="muted"> from {pr.from}</span> : null}
                     </div>
                     {d && <div class="s-detail">{d}</div>}
                     {s.state === 'active' && pct != null && (
-                      <div class="meter" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={stepLabel(s, role)}>
+                      <div class="meter" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={stepLabel(s, role, inImage)}>
                         <i style={{ width: `${pct}%` }} />
                       </div>
                     )}
@@ -868,11 +931,17 @@ function Success({ op, role, backups }: { op: 'create' | 'join'; role: Role; bac
                   Works once · expires {until(invite.expires, now)} ({clock(invite.expires, now)})
                 </span>
               </div>
-              <p class="ink2" style={{ margin: 0 }}>On the other computer, install CoyoteDB and open its dashboard, choose <strong>Join</strong> and paste the code. Or run this and paste the code when it asks:</p>
-              <CodeBlock title="On the other computer" code={invite.command ?? 'coyote join'} what="join command">
-                <span class="prompt">$ </span>
-                {invite.command ?? 'coyote join'}
-              </CodeBlock>
+              {invite.docker ? (
+                <DockerJoinSteps d={invite.docker} role={invite.role ?? 'data'} />
+              ) : (
+                <>
+                  <p class="ink2" style={{ margin: 0 }}>On the other computer, install CoyoteDB and open its dashboard, choose <strong>Join</strong> and paste the code. Or run this and paste the code when it asks:</p>
+                  <CodeBlock title="On the other computer" code={invite.command ?? 'coyote join'} what="join command">
+                    <span class="prompt">$ </span>
+                    {invite.command ?? 'coyote join'}
+                  </CodeBlock>
+                </>
+              )}
             </div>
           )}
         </div>

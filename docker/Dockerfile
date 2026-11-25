@@ -82,9 +82,17 @@ COPY LICENSE NOTICE /usr/share/doc/coyote/
 # /data/coyote is the node's data folder: Linux's per-user default
 # ($XDG_DATA_HOME/coyote), so `docker exec <c> coyote status` and every
 # other command find the node without --data-dir.
+#
+# COYOTE_DASHBOARD_LISTEN (D68): the setup page and the control panel
+# listen on the container's 0.0.0.0:7480 so the host can reach them through
+# -p 127.0.0.1:7480:7480 (never publish it on 0.0.0.0). A one-time sign-in
+# link is still needed (docker logs, or `docker exec <c> coyote dashboard`).
+# coyote ignores it outside a container and with --network host. Turn it
+# off with -e COYOTE_DASHBOARD_LISTEN= .
 ENV XDG_DATA_HOME=/data \
     HOME=/data \
     COYOTE_PG_CACHE=/opt/coyote/pg \
+    COYOTE_DASHBOARD_LISTEN=0.0.0.0:7480 \
     PATH=/usr/local/bin:/opt/coyote/pg/current/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 LABEL org.opencontainers.image.title="CoyoteDB" \
@@ -94,7 +102,9 @@ LABEL org.opencontainers.image.title="CoyoteDB" \
 
 VOLUME ["/data"]
 # 7481: cluster port (node to node, mutual TLS). 5432: client port (TLS).
-EXPOSE 7481 5432
+# 7480: setup page and control panel (plain HTTP, sign-in link required):
+# publish it on the host's loopback only, -p 127.0.0.1:7480:7480.
+EXPOSE 7481 5432 7480
 # coyote stops Postgres cleanly on SIGTERM (fast shutdown, up to 30 s, then
 # immediate). Give it time: `docker run --stop-timeout 120`, compose
 # `stop_grace_period: 2m`. Docker's default of 10 s is too short.
@@ -104,4 +114,7 @@ WORKDIR /data
 HEALTHCHECK --interval=30s --timeout=20s --start-period=5m --retries=3 \
   CMD ["/usr/local/bin/coyote", "status", "--json"]
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/coyote"]
-CMD ["up"]
+# `setup` (D68): on an empty volume it serves the setup page and waits; on
+# a volume that is already in a cluster it just starts the node, so the
+# same command survives every restart. `up` / `join` / `witness` still work.
+CMD ["setup"]

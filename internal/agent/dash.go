@@ -285,6 +285,10 @@ type VersionInfo struct {
 	// Features says which parts of API.md this agent serves for real; the
 	// dashboard hides what is false (those routes answer 501).
 	Features map[string]bool `json:"features"`
+	// Container is the kind of container this agent runs in ("docker",
+	// ...), absent outside one. Then PostgreSQL is part of the image
+	// and nothing is downloaded (D46, D68).
+	Container string `json:"container,omitempty"`
 }
 
 // dashFeatures: what this build implements of dashboard/API.md (D36).
@@ -311,7 +315,7 @@ func (d *dashServer) apiVersion(w http.ResponseWriter, r *http.Request) {
 		v, commit = f[0], strings.Trim(f[1], "()")
 	}
 	control.WriteJSON(w, http.StatusOK, VersionInfo{Product: brand.Product, Version: v, Commit: commit, GoVersion: runtime.Version(),
-		OS: runtime.GOOS, Arch: runtime.GOARCH, PostgresVersion: pg.Version, API: APIVersion, Features: dashFeatures()})
+		OS: runtime.GOOS, Arch: runtime.GOARCH, PostgresVersion: pg.Version, API: APIVersion, Features: dashFeatures(), Container: containerKind()})
 }
 
 // PlatformView is {os, arch}.
@@ -363,6 +367,9 @@ func (d *dashServer) apiAlreadySetUp(w http.ResponseWriter, r *http.Request) {
 type AddressesView struct {
 	netdetect.Report
 	Default *string `json:"default"`
+	// Container is set inside a container: its own network's addresses
+	// are left out, and the page asks for the host's address (D68).
+	Container *ContainerView `json:"container,omitempty"`
 }
 
 func (d *dashServer) apiAddresses(w http.ResponseWriter, r *http.Request) {
@@ -377,6 +384,9 @@ func (d *dashServer) apiAddresses(w http.ResponseWriter, r *http.Request) {
 	if def, ok := rep.Default(); ok {
 		s := def.Addr.String()
 		v.Default = &s
+	}
+	if kind, ok := netdetect.Container(); ok {
+		containerAddresses(&v, kind)
 	}
 	if v.Addresses == nil {
 		v.Addresses = []netdetect.Address{}
@@ -453,6 +463,9 @@ type DashInviteResponse struct {
 	Role     string        `json:"role"`
 	Command  string        `json:"command"`
 	Platform *PlatformView `json:"platform"`
+	// Docker is set when this node runs in a container: the next computer
+	// most likely runs the same image (D68).
+	Docker *DockerJoin `json:"docker,omitempty"`
 }
 
 func (d *dashServer) apiInvite(w http.ResponseWriter, r *http.Request) {
@@ -481,6 +494,10 @@ func (d *dashServer) apiInvite(w http.ResponseWriter, r *http.Request) {
 	// The code is pasted when the command asks for it, never typed after
 	// it (other users of a computer can see command lines, D50).
 	out.Command = brand.Command + " " + cmd
+	if _, ok := netdetect.Container(); ok {
+		dj := dockerJoin(role, res.Code)
+		out.Docker = &dj
+	}
 	control.WriteJSON(w, http.StatusOK, out)
 }
 

@@ -14,6 +14,7 @@ import (
 	"coyotedb.com/coyote/internal/agent"
 	"coyotedb.com/coyote/internal/brand"
 	"coyotedb.com/coyote/internal/control"
+	"coyotedb.com/coyote/internal/netdetect"
 )
 
 // dataDirHint is " --data-dir DIR" when one was given.
@@ -51,13 +52,20 @@ func cmdDashboard(args []string, stdout, stderr io.Writer) int {
 	if err := c.Do(ctx, http.MethodPost, "/session/links", agent.SessionLinkRequest{Host: *host}, &link); err != nil {
 		return apiFail(stderr, node, err)
 	}
+	_, inContainer := netdetect.Container()
 	opened := false
-	if !*noOpen {
+	if !*noOpen && !inContainer {
 		if err := openBrowser(link.URL); err == nil {
 			opened = true
 		} else {
 			fmt.Fprintf(stderr, "Could not open a browser (%v). Open the link below yourself.\n", err)
 		}
+	}
+	if inContainer {
+		// D68: there is no browser in a container; the browser is on the
+		// computer that runs it, through -p 127.0.0.1:PORT:PORT.
+		fmt.Fprintf(stdout, "Open this link in a browser on the computer that runs this container (it works once, for 2 minutes):\n\n%s\n", link.URL)
+		return 0
 	}
 	if opened {
 		fmt.Fprintf(stdout, "Opening the %s dashboard in your browser.\nIf it does not open, use this link on this computer (it works once, for 2 minutes):\n\n%s\n", brand.Product, link.URL)

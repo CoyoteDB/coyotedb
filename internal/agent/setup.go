@@ -21,6 +21,7 @@ import (
 	"coyotedb.com/coyote/internal/cluster"
 	"coyotedb.com/coyote/internal/control"
 	"coyotedb.com/coyote/internal/invite"
+	"coyotedb.com/coyote/internal/netdetect"
 	"coyotedb.com/coyote/internal/pg"
 	"coyotedb.com/coyote/internal/pki"
 )
@@ -577,6 +578,16 @@ func (a *Agent) announceSetup(d *dashServer) {
 		a.say("Could not make a sign-in link (%v). Run `%s dashboard` for one.", err, brand.Command)
 		return
 	}
+	if kind, ok := a.inContainerBridge(); ok {
+		// docker logs: there is no browser here and no window to keep
+		// open. The link works only from the host that publishes the port
+		// on its loopback (D52, D68).
+		a.say("This %s container is not in a cluster yet. Finish setting it up in a browser on the computer that runs it", kind)
+		a.say("(its port %d must be published as -p 127.0.0.1:%d:%d). This link works once, for 2 minutes:", a.ctlPort, a.ctlPort, a.ctlPort)
+		a.say("\n  %s\n", link)
+		a.say("For a new link: docker exec CONTAINER %s dashboard   (CONTAINER is its --name, for example %s)", brand.Command, brand.Command)
+		return
+	}
 	opened := a.cfg.OpenLink != nil && a.cfg.OpenLink(link)
 	a.say("This computer is not in a cluster yet. Finish setting it up in your browser:")
 	if opened {
@@ -770,6 +781,13 @@ func (d *dashServer) apiSetupStart(w http.ResponseWriter, r *http.Request, op st
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, "bad_request", err.Error(), nil)
 			return
+		}
+		if _, ok := netdetect.Container(); ok {
+			own, _ := localAddrs()
+			if msg := containerAdvertiseProblem(hp, own); msg != "" {
+				writeErr(w, http.StatusUnprocessableEntity, "container_address", msg, nil)
+				return
+			}
 		}
 		req.adv = []string{hp}
 	}

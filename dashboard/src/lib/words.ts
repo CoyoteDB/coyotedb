@@ -66,14 +66,17 @@ const STEP_LABEL: Record<StepId, string> = {
   follow: 'Following live',
 };
 
-export function stepLabel(s: Step, role: Role): string {
+/** inImage: PostgreSQL is part of the container image, nothing is downloaded (D68). */
+export function stepLabel(s: Step, role: Role, inImage = false): string {
+  if (inImage && s.id === 'download') return 'PostgreSQL 18';
+  if (inImage && s.id === 'verify') return 'Checking the program files';
   if (s.id === 'start' && role === 'witness') return 'Joining as a witness';
   if (s.id === 'start') return 'Starting the database';
   return STEP_LABEL[s.id] ?? s.id;
 }
 
-export function stepDetail(s: Step): string {
-  if (s.state === 'skipped') return s.id === 'download' ? 'Already on this computer' : 'Not needed';
+export function stepDetail(s: Step, inImage = false): string {
+  if (s.state === 'skipped') return s.id === 'download' ? (inImage ? 'Part of the image, nothing to download' : 'Already on this computer') : 'Not needed';
   if (s.detail) return s.detail;
   if (s.state === 'active' && s.bytes_total) {
     const pct = s.percent ?? Math.floor(((s.bytes_done ?? 0) / s.bytes_total) * 100);

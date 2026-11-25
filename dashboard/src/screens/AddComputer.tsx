@@ -4,6 +4,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { api, ApiError, errorMessage } from '../api/client';
 import type { InviteResponse, OpenInvite, Role } from '../api/types';
 import * as I from '../components/icons';
+import { DockerJoinSteps } from '../components/DockerJoin';
 import { Busy, CodeBlock, ConfirmDialog, CopyButton, Notice, toast, useNow } from '../components/ui';
 import { hasFeature } from '../lib/features';
 import { clock, platformLabel, until } from '../lib/format';
@@ -159,6 +160,11 @@ export function AddComputer() {
 
           <hr class="divider" />
           <h3 class="section-title">On the new computer</h3>
+          {invite.docker ? (
+            <div style={{ marginTop: '12px' }}>
+              <DockerJoinSteps d={invite.docker} role={invRole} />
+            </div>
+          ) : (
           <div class="grid-2" style={{ marginTop: '12px' }}>
             <div>
               <span class="label">Easiest</span>
@@ -175,6 +181,7 @@ export function AddComputer() {
               </CodeBlock>
             </div>
           </div>
+          )}
           {!roleBound && (
             <p class="muted small" style={{ marginTop: '16px', marginBottom: 0 }}>
               The code itself works for a data computer or a witness. What the new computer becomes is chosen when it joins: the command above joins it as a{' '}

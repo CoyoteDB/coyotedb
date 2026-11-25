@@ -25,6 +25,7 @@ import (
 	"coyotedb.com/coyote/internal/cluster"
 	"coyotedb.com/coyote/internal/control"
 	"coyotedb.com/coyote/internal/invite"
+	"coyotedb.com/coyote/internal/netdetect"
 	"coyotedb.com/coyote/internal/paths"
 	"coyotedb.com/coyote/internal/pg"
 )
@@ -148,10 +149,11 @@ Options for up, join and witness:
 Which computers to use: Linux is the recommended system for database nodes.
 macOS and Windows are supported too. A witness can run on anything.
 
-Environment: %[9]s is the same as --advertise.
+Environment: %[9]s is the same as --advertise. %[10]s is the same as
+--dashboard-listen, used only inside a container on its own network (the image sets it).
 
 Run "%[2]s <command> -h" for all options of a command.
-`, brand.Product, brand.Command, defaultDataDirHint(), agent.DefaultListen, pg.DefaultPort, control.DefaultPort, agent.DefaultClientPort, inviteEnv, advertiseEnv)
+`, brand.Product, brand.Command, defaultDataDirHint(), agent.DefaultListen, pg.DefaultPort, control.DefaultPort, agent.DefaultClientPort, inviteEnv, advertiseEnv, agent.DashboardListenEnv)
 }
 
 // dataDirFlag adds --data-dir with the OS default.
@@ -311,6 +313,16 @@ func runAgentCmd(cmd string, mode agent.Mode, args []string, stdout, stderr io.W
 			adv = append(adv, a)
 		}
 	}
+	if *dashListen == "" {
+		// The image's COYOTE_DASHBOARD_LISTEN (D68): used only inside a
+		// container on its own network, where the host reaches the port
+		// through -p 127.0.0.1:7480:7480.
+		l, note := agent.ContainerDashboardListen(os.Getenv(agent.DashboardListenEnv), *ctlPort, netdetect.Container, agent.LocalAddrs)
+		if note != "" {
+			fmt.Fprintln(stderr, note)
+		}
+		*dashListen = l
+	}
 	if *dashListen != "" {
 		p, err := checkDashListen(*dashListen, *ctlPort)
 		if err != nil {
@@ -357,6 +369,9 @@ func runAgentCmd(cmd string, mode agent.Mode, args []string, stdout, stderr io.W
 		Listen: *listen, Advertise: adv, PGPort: *port, ControlPort: *ctlPort, ClientPort: *clientPort,
 		Archive: *archive, Cache: *cacheDir, Out: stdout, Logger: log, LogPath: logPath, Version: version,
 		AllowMixedOS: *allowMixed, Wizard: wizard, DashboardListen: *dashListen,
+	}
+	if _, ok := netdetect.Container(); ok {
+		*noOpen = true // no browser in a container; the link is printed (docker logs)
 	}
 	if wizard && !*noOpen {
 		cfg.OpenLink = func(url string) bool {
@@ -456,6 +471,18 @@ func cmdInvite(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "Invite code (works once, valid until %s):\n\n", r.Expires.Local().Format("15:04 Mon 2 Jan"))
 	fmt.Fprintln(stdout, r.Code)
+	if _, ok := netdetect.Container(); ok {
+		// This node runs in a container: the next machine most likely
+		// runs the same image (D68).
+		d := agent.DockerJoinFor("data", "")
+		w := agent.DockerJoinFor("witness", "")
+		fmt.Fprintf(stdout, "\nOn the new machine, start CoyoteDB in Docker with its setup page:\n\n  %s\n\n"+
+			"then `%s` shows a sign-in link: open it in a browser on that machine, choose Join and paste the code.\n"+
+			"A witness (votes, keeps no data) needs no port 5432: %s\n\n"+
+			"Or without the page (replace PASTE-THE-CODE, NAME and ADDRESS, that machine's LAN or Tailscale address):\n\n  %s\n\n"+
+			"  witness: %s\n", d.SetupCommand, d.LinkCommand, w.SetupCommand, d.CLICommand, w.CLICommand)
+		return 0
+	}
 	fmt.Fprintf(stdout, "\nOn the new machine run `%s join` (or `%s witness` for a voter without data) and paste the code when it asks.\n", brand.Command, brand.Command)
 	fmt.Fprintln(stdout, "Linux is the recommended system for database nodes; macOS and Windows are supported too.")
 	return 0
@@ -494,6 +521,15 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	if errors.Is(err, control.ErrNotRunning) && !isClusterNode(node) {
 		return legacyStatus(node, stdout, stderr)
+	}
+	if ae := (*control.APIError)(nil); errors.As(err, &ae) && ae.Code == "not_set_up" {
+		// Running and serving the setup page (D50): healthy, not set up
+		// yet. The container's health check passes while it waits (D68).
+		if *asJSON {
+			return printJSON(stdout, map[string]any{"running": true, "set_up": false})
+		}
+		fmt.Fprintf(stdout, "Waiting for setup: this computer is not in a cluster yet. Finish the setup page (`%s dashboard` prints a sign-in link).\n", brand.Command)
+		return 0
 	}
 	if err != nil {
 		if *asJSON && errors.Is(err, control.ErrNotRunning) {

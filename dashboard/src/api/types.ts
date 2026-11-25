@@ -41,6 +41,8 @@ export interface VersionInfo {
   api: number;
   /** Which parts of API.md this agent serves for real (false: hidden, the route answers 501). */
   features?: Partial<Record<FeatureKey, boolean>>;
+  /** The kind of container the agent runs in ("docker", ...); absent outside one. PostgreSQL is then part of the image (D68). */
+  container?: string;
 }
 
 export type FeatureKey =
@@ -98,11 +100,21 @@ export interface Address {
   warnings?: string[];
 }
 
+/** Set when the agent runs inside a container (D68): its own network's addresses are left out. */
+export interface ContainerInfo {
+  kind: string;
+  /** No address found here is one other computers can use: ask for the host's. */
+  host_address_needed: boolean;
+  /** How many container-network addresses were left out. */
+  hidden: number;
+}
+
 export interface Addresses {
   addresses: Address[];
   skipped?: { interface: string; addr?: string; reason: string }[];
   warnings?: string[];
   default?: string | null;
+  container?: ContainerInfo | null;
 }
 
 /** check-invite's contact with the cluster. Nothing is sent, so the invite is not used up. */
@@ -378,6 +390,17 @@ export interface InviteResponse {
   role?: Role;
   command?: string;
   platform?: Platform | null;
+  /** This node runs in a container: what to run on the next computer, with the same image (D68). */
+  docker?: DockerJoin | null;
+}
+
+export interface DockerJoin {
+  /** Starts the next computer's container with its setup page; the code is pasted there. */
+  setup_command: string;
+  /** Prints that page's sign-in link. */
+  link_command: string;
+  /** Joins without the page: the code in COYOTE_INVITE; NAME and ADDRESS to fill in. */
+  cli_command: string;
 }
 
 export interface OpenInvite {

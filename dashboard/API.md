@@ -427,6 +427,7 @@ default pick.
 | `skipped[]` | `{interface, addr?, reason}` | Left out, and why. |
 | `warnings` | string[] | Report-level (`WarnOnlyWiFi`, `WarnNone`). |
 | `default` | string \| null, *new field* | `Report.Default()`; `null` when nothing is suggested. |
+| `container` | object, absent outside a container (D68). Related: `GET /v1/version` has `container` (kind) and `POST /v1/invites` has `docker` {`setup_command`, `link_command`, `cli_command`} in a container | `{kind, host_address_needed, hidden}`: the agent runs in a container (Docker, Podman, ...). Its own container-network addresses (172.16/12, 10.88/16, 10.0.2/24) are moved to `skipped` and never the default; `host_address_needed` is true when nothing usable is left, and the page asks for the host's LAN or Tailscale address. `POST /v1/setup/create` and `/join` then refuse loopback, `0.0.0.0` and the container's own address with 422 `container_address`. |
 
 ### `POST /v1/setup/check-invite` — new
 

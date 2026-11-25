@@ -15,4 +15,6 @@ const (
 	DirNameLower = "coyote"
 	// EnvPrefix prefixes environment variables the program reads.
 	EnvPrefix = "COYOTE_"
+	// DockerImage is the published image people run (docker/README.md).
+	DockerImage = "coyotedb/coyote:edge"
 )
