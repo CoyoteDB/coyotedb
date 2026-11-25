@@ -46,7 +46,8 @@ func TestDockerUpdate(t *testing.T) {
 	toVersion := env("COYOTE_DOCKER_TO_VERSION", "0.1.1-test")
 	buildImage(t, to, "COYOTE_VERSION="+toVersion, "COYOTE_IMAGE="+to)
 	fromV, toV := imageVersion(t, from), imageVersion(t, to)
-	t.Logf("updating from %s (%s) to %s (%s)", from, fromV, to, toV)
+	fromPG, toPG := imagePG(t, from), imagePG(t, to)
+	t.Logf("updating from %s (%s, PostgreSQL %s) to %s (%s, PostgreSQL %s)", from, fromV, fromPG, to, toV, toPG)
 	if fromV == toV {
 		t.Fatalf("both images report %q; the test needs two different versions", fromV)
 	}
@@ -115,6 +116,11 @@ func TestDockerUpdate(t *testing.T) {
 
 	// replace stops a node cleanly, removes its container (the volume
 	// stays) and runs the same command on the new image.
+	// waitingOldMain: the old main node, across a PostgreSQL minor, never
+	// started again after the switch stopped it (immediately, by design:
+	// rule 6 rewinds it anyway), so its control file still says "in
+	// production" and `docker stop` had no database to stop.
+	waitingOldMain := ""
 	replace := func(n node, mode string) {
 		t.Helper()
 		at := time.Now()
@@ -124,7 +130,7 @@ func TestDockerUpdate(t *testing.T) {
 		}
 		if !n.witness {
 			// A copy says "shut down in recovery", a main node "shut down".
-			if st := r.controlState(n); st != "shut down" && st != "shut down in recovery" {
+			if st := r.controlState(n); st != "shut down" && st != "shut down in recovery" && !(n.name == waitingOldMain && st == "in production") {
 				t.Errorf("%s: pg_controldata says %q after docker stop, want a clean shutdown", n.name, st)
 			}
 		}
@@ -139,6 +145,27 @@ func TestDockerUpdate(t *testing.T) {
 		replace(c, "join")
 		d := healthy("n1", 10*time.Minute)
 		t.Logf("%s back on the new version, following live, in the sync set, after %s", c.name, d.Round(time.Second))
+		if fromPG != toPG {
+			// D70: its record names the new PostgreSQL within seconds,
+			// with no "changed since it joined" warning.
+			want := toPG[:strings.LastIndexByte(toPG, '.')]
+			took := waitFor(t, c.name+" recorded on PostgreSQL "+want, time.Minute, func() error {
+				s, err := r.status(n1)
+				if err != nil {
+					return err
+				}
+				for _, m := range s.Nodes {
+					if m.Name == c.name && m.PostgreSQL != want {
+						return fmt.Errorf("%s records %q", m.Name, m.PostgreSQL)
+					}
+				}
+				if len(s.Warnings) > 0 {
+					return fmt.Errorf("warnings: %q", s.Warnings)
+				}
+				return nil
+			})
+			t.Logf("%s recorded on PostgreSQL %s, no warnings, %s later", c.name, want, took.Round(100*time.Millisecond))
+		}
 		moreWrites("after updating "+c.name, 100)
 	}
 
@@ -161,8 +188,40 @@ func TestDockerUpdate(t *testing.T) {
 	at := time.Now()
 	out := dockerT(t, 7*time.Minute, "exec", n1.container(), "coyote", "switch", "--to", "n2")
 	t.Logf("switch: %s", strings.TrimSpace(out))
-	d := healthy("n2", 5*time.Minute)
-	t.Logf("n2 is the main node and n1 follows it %s after the switch started (%s until healthy)", time.Since(at).Round(100*time.Millisecond), d.Round(time.Second))
+	if fromPG == toPG {
+		d := healthy("n2", 5*time.Minute)
+		t.Logf("n2 is the main node and n1 follows it %s after the switch started (%s until healthy)", time.Since(at).Round(100*time.Millisecond), d.Round(time.Second))
+	} else {
+		// Across a PostgreSQL minor (D70): the old main node still runs
+		// the older PostgreSQL, so it must not copy the new main node
+		// (standbys first); it waits, its database stopped, for its
+		// update. n3 (updated) follows n2.
+		if !strings.Contains(out, "n1 runs an older PostgreSQL ("+fromPG[:strings.LastIndexByte(fromPG, '.')]+")") {
+			t.Errorf("the switch does not say that n1 waits for its update: %q", strings.TrimSpace(out))
+		}
+		d := r.waitHealthy(n2, "n2", []string{"n3"}, 5*time.Minute)
+		t.Logf("n2 is the main node and n3 follows it %s after the switch started", d.Round(time.Second))
+		waitFor(t, "n1 waits for its update instead of copying the newer main node", 2*time.Minute, func() error {
+			s, err := r.status(n2)
+			if err != nil {
+				return err
+			}
+			for _, m := range s.Nodes {
+				if m.Name != "n1" {
+					continue
+				}
+				if m.Report == nil || !strings.Contains(m.Report.Message, "A copy must run the same or a newer PostgreSQL than the main node") {
+					return fmt.Errorf("n1 reports %+v", m.Report)
+				}
+				if m.Report.PG != nil && (m.Report.PG.Running || m.Report.PG.Streaming) {
+					return fmt.Errorf("n1 (PostgreSQL %s) runs its database while n2 runs PostgreSQL %s", fromPG, toPG)
+				}
+				return nil
+			}
+			return fmt.Errorf("no n1 in the status")
+		})
+		waitingOldMain = "n1"
+	}
 	if ok, found := wr.firstOKAfter(at); found {
 		t.Logf("first write acknowledged after the switch was sent %s after it started", ok.Sub(at).Round(100*time.Millisecond))
 	}
@@ -170,7 +229,7 @@ func TestDockerUpdate(t *testing.T) {
 
 	// 4. The old main node, now a copy.
 	replace(n1, "up")
-	d = healthy("n2", 10*time.Minute)
+	d := healthy("n2", 10*time.Minute)
 	t.Logf("n1 back on the new version as a copy after %s", d.Round(time.Second))
 	moreWrites("after updating n1", 100)
 
@@ -217,6 +276,21 @@ func TestDockerUpdate(t *testing.T) {
 		return nil
 	})
 
+	// The records name the PostgreSQL every data node runs now (D70).
+	want := toPG[:strings.LastIndexByte(toPG, '.')]
+	waitFor(t, "every data node recorded on PostgreSQL "+want, time.Minute, func() error {
+		s, err := r.status(n2)
+		if err != nil {
+			return err
+		}
+		for _, m := range s.Nodes {
+			if m.Role == "data" && m.PostgreSQL != want {
+				return fmt.Errorf("%s records %q", m.Name, m.PostgreSQL)
+			}
+		}
+		return nil
+	})
+
 	// 8. Rows (on all four data nodes), then the two-mains check.
 	wr.halt()
 	writerStopped = true
@@ -224,6 +298,18 @@ func TestDockerUpdate(t *testing.T) {
 	pr.halt()
 	probesStopped = true
 	pr.verdict()
+}
+
+// imagePG is the PostgreSQL release an image's coyote runs ("18.7.0").
+func imagePG(t *testing.T, img string) string {
+	t.Helper()
+	out := dockerT(t, 2*time.Minute, "run", "--rm", "--entrypoint", "coyote", img, "version")
+	_, rest, ok := strings.Cut(out, "(PostgreSQL ")
+	v, _, ok2 := strings.Cut(rest, ",")
+	if !ok || !ok2 || v == "" {
+		t.Fatalf("%s: coyote version printed %q", img, out)
+	}
+	return v
 }
 
 // imageVersion is the version an image's coyote reports.

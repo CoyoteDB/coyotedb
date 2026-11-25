@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.1 (2026-11-25)
+
+Carries PostgreSQL 18.7, the same as 0.1.0.
+
+**Fixed**
+- PostgreSQL minor updates (for example 18.7 to 18.8) now work one computer
+  at a time, with the database up and no saved write lost. Before, a node
+  on the new PostgreSQL release was refused as "database programs changed",
+  and a new computer on it could not join. Now a copy never copies a main
+  computer that runs a newer PostgreSQL (it waits for its own update), a new
+  computer must run the newest PostgreSQL in the cluster, and going back to
+  an older one, another major version or an unknown build stays refused.
+  The rule switches on once every computer runs 0.1.1.
+- `coyote status --json` shows each data node's PostgreSQL version.
+
+**Updating from 0.1.0**
+- One computer at a time, copies first: docker/README.md, "Updating to a
+  new version".
+
 ## 0.1.0 (2026-11-24)
 
 The first release.

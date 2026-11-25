@@ -6,14 +6,14 @@
 
 **[Website](https://coyotedb.com)** · **[Docker guide](https://coyotedb.com/docs/docker/)** · **[How we test](https://coyotedb.com/testing/)** · **[Support the project](https://coyotedb.com/support/)**
 
-> **Version 0.1.0**, the first release. Each container is one node. Test it with your own app before you trust it with data you cannot lose, and keep backups.
+> **Version 0.1.1.** Each container is one node. Test it with your own app before you trust it with data you cannot lose, and keep backups.
 
 ## Which tag
 
 | Tag | What |
 |---|---|
-| `0.1.0` | This release. Use the same version on every machine |
-| `latest` | The newest release (now 0.1.0) |
+| `0.1.1` | This release. Use the same version on every machine |
+| `latest` | The newest release (now 0.1.1) |
 | `edge` | The newest build from the main branch, not a release |
 | `sha-<commit>` | One fixed build |
 
@@ -27,7 +27,7 @@ Run this on each machine:
 docker run -d --name coyote --restart unless-stopped \
   --stop-timeout 120 --shm-size 256m \
   -p 127.0.0.1:7480:7480 -p 7481:7481 -p 5432:5432 -v coyote-data:/data \
-  coyotedb/coyote:0.1.0 setup
+  coyotedb/coyote:0.1.1 setup
 ```
 
 Get the sign-in link and open it in a browser on the same machine:
@@ -51,7 +51,7 @@ Replace `192.168.1.10` with an address of **this machine** that the other machin
 docker run -d --name coyote --restart unless-stopped \
   --stop-timeout 120 --shm-size 256m \
   -p 7481:7481 -p 5432:5432 -v coyote-data:/data \
-  coyotedb/coyote:0.1.0 up --name node1 --advertise 192.168.1.10:7481
+  coyotedb/coyote:0.1.1 up --name node1 --advertise 192.168.1.10:7481
 ```
 
 Get an invite code for the next machine (it works once, for one hour):
@@ -67,7 +67,7 @@ docker run -d --name coyote --restart unless-stopped \
   --stop-timeout 120 --shm-size 256m \
   -p 7481:7481 -p 5432:5432 -v coyote-data:/data \
   -e COYOTE_INVITE=coyote-XXXX... \
-  coyotedb/coyote:0.1.0 join --name node2 --advertise 192.168.1.11:7481
+  coyotedb/coyote:0.1.1 join --name node2 --advertise 192.168.1.11:7481
 ```
 
 Only two database machines? Add a **witness**: it votes and keeps no data, so the two can switch over by themselves. Any small computer will do:
@@ -76,7 +76,7 @@ Only two database machines? Add a **witness**: it votes and keeps no data, so th
 docker run -d --name coyote-witness --restart unless-stopped \
   -p 7481:7481 -v coyote-witness:/data \
   -e COYOTE_INVITE=coyote-XXXX... \
-  coyotedb/coyote:0.1.0 witness --name witness --advertise 192.168.1.12:7481
+  coyotedb/coyote:0.1.1 witness --name witness --advertise 192.168.1.12:7481
 ```
 
 Leave the commands as they are: when Docker restarts a container, it sees the node has already joined and just starts it. Put the code in `COYOTE_INVITE`, not on the command line, where other programs could read it.

@@ -345,7 +345,7 @@ func handoverTarget(st cluster.State, self string) (cluster.Member, bool) {
 		ok = append(ok, m)
 	}
 	slices.SortFunc(ok, func(x, y cluster.Member) int {
-		ax, ay := x.Platform.Alike(me.Platform), y.Platform.Alike(me.Platform)
+		ax, ay := st.Compatible(x.Platform, me.Platform), st.Compatible(y.Platform, me.Platform)
 		if ax != ay {
 			if ax {
 				return -1

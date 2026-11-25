@@ -18,7 +18,8 @@ type CutResult struct {
 
 // ChooseTarget picks the member to promote after a rule 2 cut: among the
 // candidates (Candidates) whose stream is confirmed cut, the one with the
-// highest WAL end; ties go to a voter, then to the lowest id. It refuses
+// highest WAL end; ties go to the older PostgreSQL minor (D70), then to a
+// voter, then to the lowest id. It refuses
 // (returns "" and why) unless at least CutsNeeded candidates are cut, so
 // the old primary can no longer get a write confirmed and the chosen one
 // holds every acknowledged write.
@@ -55,6 +56,12 @@ func ChooseTarget(st cluster.State, cut map[string]CutResult, damaged map[string
 				return -1
 			}
 			return 1
+		}
+		// D70: during a PostgreSQL minor update, of two copies that hold
+		// the same writes the one on the older minor becomes the main
+		// node, so the others (same or newer) can keep copying it.
+		if c := st.ComparePG(st.Members[a].Platform, st.Members[b].Platform); c != 0 && st.SamePGLine(st.Members[a].Platform, st.Members[b].Platform) {
+			return c
 		}
 		va, vb := st.Members[a].Suffrage == cluster.Voter, st.Members[b].Suffrage == cluster.Voter
 		if va != vb {

@@ -249,12 +249,28 @@ func (a *Agent) reconcile(ctx context.Context) error {
 	case actRemoved:
 		return a.becomeRemoved("")
 	case actNone:
+		// D70: a running copy whose main node now runs a newer
+		// PostgreSQL minor (it was updated in place) stops copying it.
+		if _, role := a.currentPG(); role == "standby" {
+			if why := a.minorFollowBlocked(st); why != "" {
+				a.stopBehindCopy(ctx, why)
+				return nil
+			}
+		}
 		return a.steady(ctx, st)
-	case actStartStandby, actClone, actRejoin, actReclone:
+	case actStartStandby, actClone, actRejoin, actReclone, actRepoint, actResume:
 		// Rule 1 (mixed systems, D37): never become a copy of a main node
 		// of another kind that this machine does not match.
-		if why := a.mixedFollowBlocked(st); why != "" {
-			a.setPhase("waiting", why)
+		if act.kind != actRepoint && act.kind != actResume {
+			if why := a.mixedFollowBlocked(st); why != "" {
+				a.setPhase("waiting", why)
+				return nil
+			}
+		}
+		// Rule 1 (D70): never copy a main node on a newer PostgreSQL
+		// minor than this program's (standbys are updated first).
+		if why := a.minorFollowBlocked(st); why != "" {
+			a.stopBehindCopy(ctx, why)
 			return nil
 		}
 	}

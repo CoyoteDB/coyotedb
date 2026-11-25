@@ -34,7 +34,7 @@ import (
 //	controller_status (leader) the controller's report
 //	removed           tell a node it was removed from the cluster
 //	guard_now         (data node) run the portability audit now and record it (mixed join check)
-//	caps              which newer features this agent knows ("mixed_os": the D37 state fields; "backup": D63)
+//	caps              which newer features this agent knows ("mixed_os": the D37 state fields; "backup": D63; "pg_builds": D70)
 //	backup_now        take a full backup now (D63)
 //	mixed_prepare     (primary) make every database builtin-only before a mixed join (D48)
 //	addr_report       what the calling node found about its own address (D66; empty clears it)
@@ -85,6 +85,9 @@ type cutReq struct {
 
 type cutResp struct {
 	LSN string `json:"lsn"`
+	// PGBuild is the sha256 of the PostgreSQL build this node runs (D70;
+	// absent from agents before it).
+	PGBuild string `json:"pg_build,omitempty"`
 }
 
 type syncNodeReq struct {
@@ -245,7 +248,7 @@ func (a *Agent) handle(ctx context.Context, req rpcRequest) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return cutResp{LSN: lsn.String()}, nil
+		return cutResp{LSN: lsn.String(), PGBuild: a.inst.Build.SHA256}, nil
 	case "resume_stream":
 		return nil, a.resumeStream(ctx)
 	case "step_down", "step_up": // planned switch, old main node (lease_stepdown.go)
@@ -286,7 +289,7 @@ func (a *Agent) handle(ctx context.Context, req rpcRequest) (any, error) {
 	case "guard_now":
 		return nil, a.guardNow(ctx)
 	case "caps":
-		return capsResp{MixedOS: true, Backup: true}, nil
+		return capsResp{MixedOS: true, Backup: true, PGBuilds: true}, nil
 	case "backup_now":
 		return a.rpcBackupNow(ctx, req.Body)
 	case "mixed_prepare":

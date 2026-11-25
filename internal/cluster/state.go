@@ -280,6 +280,11 @@ type State struct {
 	LastServed string `json:"last_served,omitempty"`
 	// Backup is the backup settings (D63); nil = DefaultBackupSettings.
 	Backup *BackupSettings `json:"backup,omitempty"`
+	// PGBuilds is the table of pinned PostgreSQL builds (D70, key: the
+	// archive's sha256), registered by members' agents (RegisterPGBuilds).
+	// Rule 1 lets data nodes on different builds of one PostgreSQL major
+	// share the cluster only through it.
+	PGBuilds map[string]PGBuild `json:"pg_builds,omitempty"`
 	// AppliedIndex is the Raft index of the last applied command.
 	AppliedIndex uint64 `json:"applied_index"`
 }
@@ -326,6 +331,7 @@ func (s *State) Clone() State {
 		c.PGSecrets = &v
 	}
 	c.Backup = s.Backup.clone()
+	c.PGBuilds = maps.Clone(s.PGBuilds)
 	return c
 }
 

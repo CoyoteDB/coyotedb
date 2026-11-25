@@ -11,6 +11,7 @@ import (
 
 	"github.com/hashicorp/raft"
 
+	"coyotedb.com/coyote/internal/brand"
 	"coyotedb.com/coyote/internal/pki"
 )
 
@@ -270,6 +271,8 @@ func applyCommand(st *State, cmd Command) error {
 		return nil
 	case *SetPrimary:
 		return applySetPrimary(st, c)
+	case *RegisterPGBuilds:
+		return applyRegisterPGBuilds(st, c)
 	case *RenewLease:
 		if c.Epoch != st.Epoch {
 			return errorf(ErrEpochMismatch, "lease for epoch %d, current %d", c.Epoch, st.Epoch)
@@ -471,18 +474,36 @@ type platformCheck struct {
 //     d. for a join: no data member's guard is blocked (conditions 2-5
 //     audit findings, condition 7 damage, or a drifted fingerprint), and
 //     some data member audited within MixedGuardMaxAge of the join.
+//
+// PostgreSQL minor updates (D70): a data member that is not alike to
+// another but on the same PostgreSQL line (State.SamePGLine: both builds
+// in the cluster's pinned table, same major, OS and processor) counts as
+// matching it, with a direction: a joiner must be at or above the newest
+// build recorded for any data member, and a member's own record may move
+// to another build of its line only forward. While the table is empty
+// (until every member's program knows it) nothing is on a line, and the
+// rule is exactly 1 and 2 above.
 func checkPlatform(st *State, m Member, pc platformCheck) (bool, error) {
 	if m.Role != RoleData {
 		return false, nil
 	}
-	var others, unlike []Member
+	var others, unlike, line []Member
 	for _, o := range st.DataMembers() {
 		if o.ID == m.ID {
 			continue
 		}
 		others = append(others, o)
-		if !o.Platform.Alike(m.Platform) {
+		switch {
+		case o.Platform.Alike(m.Platform):
+		case st.SamePGLine(m.Platform, o.Platform):
+			line = append(line, o)
+		default:
 			unlike = append(unlike, o)
+		}
+	}
+	if len(line) > 0 {
+		if err := checkPGLine(st, m, pc, others); err != nil {
+			return false, err
 		}
 	}
 	if len(unlike) == 0 {
@@ -546,6 +567,44 @@ func checkPlatform(st *State, m Member, pc platformCheck) (bool, error) {
 			"no data node has checked the database for things that cannot be shared between kinds of machines in the last %s", MixedGuardMaxAge)
 	}
 	return true, nil
+}
+
+// checkPGLine is checkPlatform's direction rule for builds of one
+// PostgreSQL line (D70): no copy may run an older minor than the main node
+// it copies, and the update order is copies first, so
+//
+//   - a joiner (it becomes a copy) is at or above every same-line data
+//     member's recorded build, so it can copy any of them, including the
+//     newest one a switch could make the main node;
+//   - a member's record moves only forward (a downgrade is refused; going
+//     back to the build every other data member has is "alike" and passes
+//     as before rule 1's exception existed).
+func checkPGLine(st *State, m Member, pc platformCheck, others []Member) error {
+	if pc.join {
+		for _, o := range others {
+			if st.SamePGLine(m.Platform, o.Platform) && st.ComparePG(m.Platform, o.Platform) < 0 {
+				return errorf(ErrPlatformMismatch,
+					"this machine runs %s, older than data node %q (%s); a new data node must run the newest PostgreSQL in the cluster: update %s on this machine to the version the other nodes run",
+					st.describePG(m.Platform), o.Name, st.describePG(o.Platform), brand.Command)
+			}
+		}
+		return nil
+	}
+	prev, ok := st.Members[m.ID]
+	if !ok || prev.Platform.Alike(m.Platform) {
+		return nil
+	}
+	if !st.SamePGLine(prev.Platform, m.Platform) {
+		return errorf(ErrPlatformMismatch,
+			"this machine now runs %s but joined on %s; only an update to a newer pinned PostgreSQL of the same major version is recorded",
+			describePlatform(m.Platform), describePlatform(prev.Platform))
+	}
+	if st.ComparePG(m.Platform, prev.Platform) <= 0 {
+		return errorf(ErrPlatformMismatch,
+			"this machine now runs %s, older than the %s it ran before; PostgreSQL is never moved back while other data nodes run a newer one",
+			st.describePG(m.Platform), st.describePG(prev.Platform))
+	}
+	return nil
 }
 
 func describePlatform(p Platform) string {

@@ -246,6 +246,8 @@ type Agent struct {
 	recv recvWatch
 	// bk is the backup loop's state (backup.go, D63).
 	bk backupState
+	// pgb is the PostgreSQL build table registration's state (pgminor.go, D70).
+	pgb pgBuildsState
 
 	// early is the local control port when it is served before the node
 	// is a member (the setup page, D50; setup.go); nil otherwise.
@@ -366,8 +368,12 @@ func (a *Agent) runMember(ctx context.Context) error {
 			return &ExitError{Code: 2, Msg: "--pg-cache: " + err.Error() + "."}
 		}
 		a.setup.step(stepDownload, stepActive, "")
+		build, err := selectedBuild()
+		if err != nil {
+			return err
+		}
 		inst, err := pg.Ensure(ctx, pg.FetchOptions{
-			CacheDir: a.cacheDir(), Archive: a.cfg.Archive, Logger: a.log, Progress: a.downloadProgress(),
+			CacheDir: a.cacheDir(), Build: build, Archive: a.cfg.Archive, Logger: a.log, Progress: a.downloadProgress(),
 		})
 		if err != nil {
 			a.setup.step(stepDownload, stepFailed, "")
@@ -770,6 +776,7 @@ func (a *Agent) openCluster(ctx context.Context, plat cluster.Platform) error {
 		ExplainPlatform: explainPlatform,
 		MixedFieldsOK:   a.mixedFieldsOK,
 		Version:         a.cfg.Version,
+		PGBuilds:        knownPGBuilds(),
 	}
 	if a.role == cluster.RoleData {
 		ccfg.PGAddr = a.localPGAddr
@@ -947,6 +954,10 @@ func (a *Agent) startPG(ctx context.Context) error {
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(a.pgPort))
 	a.pgAddr.Store(&addr)
 	a.log.Info("postgres running", "role", role, "pid", srv.PID(), "port", a.pgPort)
+	// Measure and announce at once (not at the next guard tick): after an
+	// update the cluster's record of this node's PostgreSQL build moves
+	// within seconds (D70).
+	a.mixed.kickNow()
 	return nil
 }
 

@@ -327,3 +327,43 @@ func TestRule2CountIgnoresRaftK(t *testing.T) {
 		t.Fatalf("CutsNeeded = %d with 2 candidates, want 2", n)
 	}
 }
+
+// D70: during a PostgreSQL minor update, of copies holding the same
+// writes the one on the older minor becomes the main node (the others can
+// copy it); a higher WAL end still always wins.
+func TestChooseTargetOlderMinorOnTie(t *testing.T) {
+	st := newWorld(4, false).in.State
+	sha := func(c byte) string { return strings.Repeat(string(c), 64) }
+	s := st
+	s.Members = map[string]cluster.Member{}
+	for id, v := range st.Members {
+		s.Members[id] = v
+	}
+	set := func(id string, c byte) {
+		m := s.Members[id]
+		m.Platform = cluster.Platform{OS: "linux", Arch: "amd64", PGBuildSHA: sha(c)}
+		s.Members[id] = m
+	}
+	set("n1", '1')
+	set("n2", '2')
+	set("n3", '2')
+	set("n4", '1')
+	s.Sync.K = 1
+	cut := func(lsn pg.LSN) CutResult { return CutResult{Cut: true, LSN: lsn} }
+	res := map[string]CutResult{"n2": cut(30), "n3": cut(30), "n4": cut(30)}
+	// Without the table: as before (lowest id).
+	if got, _ := ChooseTarget(s, res, nil); got != "n2" {
+		t.Fatalf("without the table: %q", got)
+	}
+	s.PGBuilds = map[string]cluster.PGBuild{
+		sha('1'): {Version: "18.6.0", OS: "linux", Arch: "amd64"},
+		sha('2'): {Version: "18.7.0", OS: "linux", Arch: "amd64"},
+	}
+	if got, _ := ChooseTarget(s, res, nil); got != "n4" {
+		t.Fatalf("tie: %q, want n4 (18.6)", got)
+	}
+	res["n3"] = cut(31)
+	if got, _ := ChooseTarget(s, res, nil); got != "n3" {
+		t.Fatalf("higher WAL end: %q, want n3", got)
+	}
+}

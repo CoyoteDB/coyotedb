@@ -44,14 +44,25 @@ type joinRequest struct {
 	Protocol int `json:"protocol,omitempty"`
 	// Version is the joiner's program version, for messages.
 	Version string `json:"version,omitempty"`
+	// PGBuild describes the joiner's own PostgreSQL build (Platform.
+	// PGBuildSHA) from its program's pinned table (D70). The leader adds
+	// it to the cluster's table before admitting the joiner, once the
+	// table exists, so a computer on a newer release can join.
+	PGBuild *PGBuild `json:"pg_build,omitempty"`
 }
 
 // JoinProtocol versions what a member's program must understand. 2 (D37):
 // the mixed-system state fields (Platform fingerprint and probe, Member
 // guard, Settings.MixedOS). The leader refuses a joiner with an older
 // protocol: its state machine decodes strictly and would halt on those
-// fields, which leaves a dead node in the cluster.
-const JoinProtocol = 2
+// fields, which leaves a dead node in the cluster. 3 (D70): the PostgreSQL
+// build table (State.PGBuilds, RegisterPGBuilds); required once the
+// cluster's table exists.
+const JoinProtocol = 3
+
+// joinProtocolMixed is the protocol a joiner needs while the cluster has
+// no PostgreSQL build table yet.
+const joinProtocolMixed = 2
 
 type joinResponse struct {
 	ClusterID string              `json:"cluster_id"`
@@ -309,6 +320,9 @@ func joinAttempt(ctx context.Context, cfg Config, p *joinPending) (*Node, error)
 		Protocol:     JoinProtocol,
 		Version:      cfg.Version,
 	}
+	if b, ok := cfg.PGBuilds[cfg.Platform.PGBuildSHA]; ok && p.Role == RoleData {
+		req.PGBuild = &b
+	}
 	resp, err := joinVia(ctx, inv, req, cfg.Timing, cfg.transportTiming())
 	if err != nil {
 		ln.Close()
@@ -428,7 +442,11 @@ func (n *Node) rpcJoin(ctx context.Context, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if n.IsLeader() {
-		if req.Protocol < JoinProtocol {
+		need := joinProtocolMixed
+		if len(n.fsm.State().PGBuilds) > 0 {
+			need = JoinProtocol
+		}
+		if req.Protocol < need {
 			ours := n.cfg.Version
 			if ours == "" {
 				ours = "the cluster's version"
@@ -443,6 +461,9 @@ func (n *Node) rpcJoin(ctx context.Context, raw json.RawMessage) (any, error) {
 			// measured / mixing off), an alike one joins as before.
 			req.Member.Platform = Platform{OS: req.Member.Platform.OS, Arch: req.Member.Platform.Arch, PGBuildSHA: req.Member.Platform.PGBuildSHA}
 			req.AllowMixedOS = false
+		}
+		if err := n.registerJoinerBuild(ctx, req); err != nil {
+			return nil, err
 		}
 		if err := n.mixedJoinCheck(ctx, req); err != nil {
 			return nil, err
@@ -526,6 +547,38 @@ func (n *Node) admit(req joinRequest) (joinResponse, error) {
 	return n.joinResponse(n.fsm.State(), req.CSR, m.ID, now, res.Index, false)
 }
 
+// registerJoinerBuild adds a data joiner's own PostgreSQL build to the
+// cluster's table (D70) when the table exists (so every member's program
+// knows the command) and the build is not in it yet: a computer on a newer
+// release names a build the members' programs do not pin. Only a joiner
+// with a valid, unused invite is heard; it is then trusted like a member
+// to describe its own program. A conflicting description is refused by the
+// state machine.
+func (n *Node) registerJoinerBuild(ctx context.Context, req joinRequest) error {
+	st := n.fsm.State()
+	b := req.PGBuild
+	if b == nil || req.Member.Role != RoleData || len(st.PGBuilds) == 0 {
+		return nil
+	}
+	// Only for a joiner holding a valid invite (this runs before admit
+	// checks it): anyone else could fill the table.
+	if req.ClusterID != st.ClusterID || len(req.Secret) != 32 || checkSecret(&st, hashSecret(req.Secret), n.now()) != nil {
+		return nil
+	}
+	sha := req.Member.Platform.PGBuildSHA
+	if old, ok := st.PGBuilds[sha]; ok && old == *b {
+		return nil
+	}
+	if b.OS != req.Member.Platform.OS || b.Arch != req.Member.Platform.Arch {
+		return errorf(ErrInvalid, "the joiner's PostgreSQL build is for %s/%s, but it is %s/%s", b.OS, b.Arch, req.Member.Platform.OS, req.Member.Platform.Arch)
+	}
+	if _, err := n.Apply(ctx, &RegisterPGBuilds{Builds: map[string]PGBuild{sha: *b}}); err != nil {
+		return fmt.Errorf("record the joiner's PostgreSQL build: %w", err)
+	}
+	n.log.Info("recorded a joiner's PostgreSQL build", "build", short(sha), "version", b.Version)
+	return nil
+}
+
 // mixedJoinCheck runs Config.MixedJoinCheck for a data joiner that is not
 // alike to every data member (a mixed join, safety rule 1 extension),
 // before admit, without holding memberMu (the check writes to the cluster
@@ -541,7 +594,7 @@ func (n *Node) mixedJoinCheck(ctx context.Context, req joinRequest) error {
 	}
 	mixed := false
 	for _, o := range st.DataMembers() {
-		if !o.Platform.Alike(req.Member.Platform) {
+		if !st.Compatible(o.Platform, req.Member.Platform) {
 			mixed = true
 		}
 	}
@@ -568,7 +621,7 @@ func (n *Node) explainRefusal(st State, m Member, err error) error {
 		return err
 	}
 	for _, o := range st.DataMembers() {
-		if o.Platform.Alike(m.Platform) || o.Platform.FingerprintText == "" || o.Platform.Fingerprint == m.Platform.Fingerprint {
+		if st.Compatible(o.Platform, m.Platform) || o.Platform.FingerprintText == "" || o.Platform.Fingerprint == m.Platform.Fingerprint {
 			continue
 		}
 		if lines := n.cfg.ExplainPlatform(m.Platform, o.Platform); len(lines) > 0 {

@@ -124,6 +124,11 @@ func (a *Agent) runSwitchFrom(ctx context.Context, to string, planned bool, from
 	if why := crossSystemSwitchBlocked(st, target); why != "" {
 		return nil, errors.New(why)
 	}
+	// Rule 1 (D70): no copy may be left on an older PostgreSQL minor than
+	// the new main node.
+	if why := minorSwitchBlocked(st, target); why != "" {
+		return nil, errors.New(why)
+	}
 	if len(st.Sync.Members) > 0 && !slices.Contains(st.Sync.Members, target.ID) {
 		return nil, fmt.Errorf("%s is not in the sync set, so it may be missing acknowledged writes (safety rule 3); add it first: %s dev set-sync", target.Name, brand.Command)
 	}
@@ -136,6 +141,15 @@ func (a *Agent) runSwitchFrom(ctx context.Context, to string, planned bool, from
 	}
 	if tr.PG == nil || !tr.PG.Running || tr.PG.Role != "standby" || tr.Marker != "" {
 		return nil, fmt.Errorf("%s is not running as a healthy copy right now (%s)", target.Name, tr.State)
+	}
+	// D70: the records are what every copy compares; the target's must
+	// name the PostgreSQL it runs now (it moves seconds after a start).
+	targetRuns := target.Platform
+	if tr.PGBuild != "" {
+		targetRuns.PGBuildSHA = tr.PGBuild
+	}
+	if why := minorRecordPending(st, target, targetRuns); why != "" {
+		return nil, errors.New(why)
 	}
 	if err := fault(ctx, a, "switch-before-cut"); err != nil {
 		return nil, err
@@ -186,6 +200,18 @@ func (a *Agent) runSwitchFrom(ctx context.Context, to string, planned bool, from
 		lsn, err := pg.ParseLSN(cr.LSN)
 		if err != nil {
 			return abort(err)
+		}
+		// D70: what this copy runs now, not only its record: it must not
+		// be older than the new main node.
+		if cr.PGBuild != "" {
+			runs := m.Platform
+			runs.PGBuildSHA = cr.PGBuild
+			if st.NewerPG(targetRuns, runs) {
+				tv, _ := st.PGVersionOf(targetRuns)
+				mv, _ := st.PGVersionOf(runs)
+				return abort(fmt.Errorf("%s runs PostgreSQL %s, newer than %s (PostgreSQL %s), which could then not copy it. Update %s first (copies first, then the switch)",
+					target.Name, tv.Short(), m.Name, mv.Short(), m.Name))
+			}
 		}
 		if lsn > maxLSN {
 			maxLSN, maxFrom = lsn, m.Name
@@ -298,7 +324,12 @@ func (a *Agent) runSwitchFrom(ctx context.Context, to string, planned bool, from
 		}
 	}
 	msg := fmt.Sprintf("%s is now the main node (term %d).", target.Name, newEpoch)
-	if st.PrimaryID != "" {
+	if old, ok := st.Members[st.PrimaryID]; ok && st.NewerPG(target.Platform, old.Platform) {
+		// D70: the old main node runs an older PostgreSQL minor; it may
+		// not copy the new main node until it is updated.
+		ov, _ := st.PGVersionOf(old.Platform)
+		msg += fmt.Sprintf(" %s runs an older PostgreSQL (%s): it waits, its database stopped, until it is updated, then rejoins as a copy by itself.", oldName, ov.Short())
+	} else if st.PrimaryID != "" {
 		msg += fmt.Sprintf(" %s will rejoin as a copy by itself.", oldName)
 	}
 	a.log.Info("switch: done", "primary", target.Name, "epoch", newEpoch)

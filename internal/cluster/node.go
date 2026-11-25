@@ -105,6 +105,10 @@ type Config struct {
 	// Version is this program's version (sent with a join; named in the
 	// refusal of a joiner that is too old).
 	Version string
+	// PGBuilds is this program's pinned PostgreSQL builds (D70, key:
+	// sha256; pg.KnownBuilds). A joining data node sends the entry for its
+	// own build. Nil: none sent.
+	PGBuilds map[string]PGBuild
 
 	// wrapStable (tests only) wraps the Raft stable store, under
 	// guardedStable, to fail its writes like a broken disk.

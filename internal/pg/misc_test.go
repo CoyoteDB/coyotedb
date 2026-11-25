@@ -65,6 +65,58 @@ func TestPinnedChecksumsWellFormed(t *testing.T) {
 	}
 }
 
+// TestKnownBuilds: the current release first, every earlier release of the
+// same major with all five targets, every checksum distinct and well
+// formed, versions strictly older than Version (D70).
+func TestKnownBuilds(t *testing.T) {
+	hex64 := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	kb := KnownBuilds()
+	if want := 5 * (1 + len(earlierBuilds)); len(kb) != want {
+		t.Fatalf("%d known builds, want %d", len(kb), want)
+	}
+	seen := map[string]bool{}
+	for i, b := range kb {
+		if (i < 5) != (b.Version == Version) {
+			t.Errorf("build %d is %s; the current release comes first", i, b.Version)
+		}
+		if !hex64.MatchString(b.SHA256) || seen[b.SHA256] {
+			t.Errorf("%s %s: bad or duplicate sha256 %q", b.Version, b.Target, b.SHA256)
+		}
+		seen[b.SHA256] = true
+		if _, _, ok := GoPlatform(b.Target); !ok {
+			t.Errorf("%s: no Go platform", b.Target)
+		}
+		if !strings.HasPrefix(b.Version, MajorVersion+".") {
+			t.Errorf("%s is not PostgreSQL %s", b.Version, MajorVersion)
+		}
+	}
+	prev := Version
+	for _, e := range earlierBuilds {
+		if len(e.SHA256) != 5 {
+			t.Errorf("%s: %d targets, want 5", e.Version, len(e.SHA256))
+		}
+		if !versionLess(e.Version, prev) {
+			t.Errorf("%s is listed after %s; newest first, all older than %s", e.Version, prev, Version)
+		}
+		prev = e.Version
+	}
+	if b, _ := CurrentBuild(); b.Version != Version {
+		t.Errorf("CurrentBuild is %s, want %s", b.Version, Version)
+	}
+}
+
+func versionLess(a, b string) bool {
+	var x, y [3]int
+	fmt.Sscanf(a, "%d.%d.%d", &x[0], &x[1], &x[2])
+	fmt.Sscanf(b, "%d.%d.%d", &y[0], &y[1], &y[2])
+	for i := range x {
+		if x[i] != y[i] {
+			return x[i] < y[i]
+		}
+	}
+	return false
+}
+
 func TestParsePidFile(t *testing.T) {
 	full := "4242\n/data/pg data\n1732100000\n7432\n\n127.0.0.1\n  1234567   65536\nready   \n"
 	p, err := ParsePidFile(full)

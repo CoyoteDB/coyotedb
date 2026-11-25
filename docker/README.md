@@ -17,10 +17,10 @@ Linux (Intel/AMD) with Docker, Windows with Docker Desktop, and Apple
 silicon Macs with Docker Desktop:
 
 ```bash
-docker pull coyotedb/coyote:0.1.0
+docker pull coyotedb/coyote:0.1.1
 ```
 
-Tags: `0.1.0` is the first release (use the same version on every machine),
+Tags: `0.1.1` is the newest release (use the same version on every machine),
 `latest` the newest release, `edge` the main branch (not a release), and
 `sha-<commit>` one fixed build.
 
@@ -235,7 +235,15 @@ node and only then lets the new one take writes. Apps see their
 connections closed once and reconnect; a new connection waits for the new
 main node instead of failing.
 
-**4. The old main machine,** now a copy: step 1 on it.
+**4. The old main machine,** now a copy: step 1 on it. When the new
+release brings a newer PostgreSQL, this machine does not copy the new main
+node until it is updated (a copy must never run an older PostgreSQL than
+the main node); `coyote status` says it waits. Update it right away; it
+then catches up by itself.
+
+Copies first matters: a switch to an updated copy is refused while another
+copy still runs the older PostgreSQL ("Update node3 first"), and a new
+machine must run the newest PostgreSQL in the cluster to join.
 
 **5. Check.** Every machine on the new version, and healthy:
 

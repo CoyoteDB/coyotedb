@@ -52,6 +52,10 @@ type NodeReport struct {
 	// Pages is the data node's page health (D55): damaged pages found,
 	// Postgres' checksum counters, the page check's progress.
 	Pages *PageReport `json:"pages,omitempty"`
+	// PGBuild is the sha256 of the PostgreSQL build this data node runs
+	// now (D70); its cluster record may still name the build it ran
+	// before an update for a few seconds after its database started.
+	PGBuild string `json:"pg_build,omitempty"`
 }
 
 // ProxyReport is the client port and its counters.
@@ -108,6 +112,7 @@ func (a *Agent) report(ctx context.Context) NodeReport {
 	}
 	r.PG = a.pgReport(ctx)
 	r.Pages = a.pages.report()
+	r.PGBuild = a.inst.Build.SHA256
 	return r
 }
 
@@ -249,6 +254,9 @@ type MemberView struct {
 	System      string         `json:"system,omitempty"`
 	Fingerprint string         `json:"fingerprint,omitempty"`
 	Guard       *cluster.Guard `json:"guard,omitempty"`
+	// PostgreSQL is the recorded PostgreSQL version ("18.7") of a data
+	// node whose build is in the cluster's table of pinned builds (D70).
+	PostgreSQL string `json:"postgresql,omitempty"`
 }
 
 func (a *Agent) clusterStatus(ctx context.Context) Status {
@@ -330,6 +338,9 @@ func (a *Agent) clusterStatus(ctx context.Context) Status {
 		}
 		if m.Role == cluster.RoleData {
 			v.System, v.Guard = systemName(m.Platform), m.Guard
+			if pv, ok := st.PGVersionOf(m.Platform); ok {
+				v.PostgreSQL = pv.Short()
+			}
 			if len(m.Platform.Fingerprint) >= 12 {
 				v.Fingerprint = m.Platform.Fingerprint[:12]
 			}

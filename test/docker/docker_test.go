@@ -301,9 +301,11 @@ type status struct {
 		Reachable   bool   `json:"reachable"`
 		Replication string `json:"replication"`
 		LagBytes    int64  `json:"lag_bytes"`
+		PostgreSQL  string `json:"postgresql"`
 		Report      *struct {
-			State string `json:"state"`
-			PG    *struct {
+			State   string `json:"state"`
+			Message string `json:"message"`
+			PG      *struct {
 				Running   bool `json:"running"`
 				Streaming bool `json:"streaming"`
 			} `json:"postgres"`

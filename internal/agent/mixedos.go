@@ -86,8 +86,10 @@ type mixedState struct {
 	work sync.Mutex // serialises guard work (loop and guardNow)
 
 	mu sync.Mutex
-	// measuredPID: the postmaster the last successful measurement was of.
-	measuredPID int
+	// measuredPID: the postmaster the last successful measurement was of;
+	// measuredBuilds: the size of the cluster's PostgreSQL build table then.
+	measuredPID    int
+	measuredBuilds int
 	// portablePID: the primary postmaster ensurePortable last ran for.
 	portablePID int
 	drift       string
@@ -186,12 +188,13 @@ func explainPlatform(joiner, member cluster.Platform) []string {
 	return pg.ExplainCanonical(joiner.FingerprintText, member.FingerprintText)
 }
 
-// unlikeData lists the data members that are not alike to p (other than
-// self): a non-empty list means p's node is in a mixed cluster.
+// unlikeData lists the data members that are neither alike to p nor on
+// its PostgreSQL line (other than self): a non-empty list means p's node
+// is in a mixed cluster.
 func unlikeData(st cluster.State, self string, p cluster.Platform) []cluster.Member {
 	var out []cluster.Member
 	for _, m := range st.DataMembers() {
-		if m.ID != self && !m.Platform.Alike(p) {
+		if m.ID != self && !st.Compatible(m.Platform, p) {
 			out = append(out, m)
 		}
 	}
@@ -253,6 +256,9 @@ func (a *Agent) guardStep(ctx context.Context, force bool) error {
 	if a.mixed.getDrift() != "" && a.primaryUnlike(a.cn.State()) {
 		a.retireDrifted(ctx)
 	}
+	// D70: this program's pinned PostgreSQL builds into the cluster's
+	// table (once every member knows it), before the platform is announced.
+	a.registerPGBuilds(ctx)
 	srv, role := a.currentPG()
 	if srv == nil {
 		return nil
@@ -265,7 +271,11 @@ func (a *Agent) guardStep(ctx context.Context, force bool) error {
 	pid := srv.PID()
 	m := &a.mixed
 	m.mu.Lock()
-	newServer := pid != m.measuredPID
+	// A refused announcement (drift) is tried again when the cluster's
+	// PostgreSQL build table changed: the refusal may have been a minor
+	// update that the table now allows (D70), e.g. once the last member of
+	// a rolling update runs a program that knows the table.
+	newServer := pid != m.measuredPID || (m.drift != "" && len(st.PGBuilds) != m.measuredBuilds)
 	needPortable := role == "primary" && pid != m.portablePID
 	// Audit at once after a start or a change of role (a promoted copy
 	// checks right away: a guard failing after failover shows at once).
@@ -289,7 +299,7 @@ func (a *Agent) guardStep(ctx context.Context, force bool) error {
 			a.log.Info("mixed systems: measuring this node failed; will retry", "err", err)
 		} else {
 			m.mu.Lock()
-			m.measuredPID = pid
+			m.measuredPID, m.measuredBuilds = pid, len(st.PGBuilds)
 			m.mu.Unlock()
 		}
 	}
@@ -448,11 +458,13 @@ func (a *Agent) kickLoop() {
 }
 
 // primaryUnlike reports whether the main node is a different kind of
-// machine than this node's record.
+// machine than this node's record: neither alike nor on the same
+// PostgreSQL line (D70; which of those two may copy which is
+// minorFollowBlocked's business).
 func (a *Agent) primaryUnlike(st cluster.State) bool {
 	p, ok := st.Members[st.PrimaryID]
 	me, ok2 := st.Members[a.cn.ID()]
-	return ok && ok2 && p.ID != me.ID && !p.Platform.Alike(me.Platform)
+	return ok && ok2 && p.ID != me.ID && !st.Compatible(p.Platform, me.Platform)
 }
 
 // writeGuard records the guard results in the cluster when they changed,
@@ -637,7 +649,7 @@ func (a *Agent) mixedFollowBlocked(st cluster.State) string {
 // 7). Switches between alike machines are not affected.
 func crossSystemSwitchBlocked(st cluster.State, target cluster.Member) string {
 	p, ok := st.Members[st.PrimaryID]
-	if !ok || p.Platform.Alike(target.Platform) {
+	if !ok || st.Compatible(p.Platform, target.Platform) {
 		return ""
 	}
 	tp, pp := target.Platform, p.Platform
@@ -762,6 +774,8 @@ func (a *Agent) retireDrifted(ctx context.Context) {
 type capsResp struct {
 	MixedOS bool `json:"mixed_os"`
 	Backup  bool `json:"backup"` // knows the backup settings (D63)
+	// PGBuilds: knows the PostgreSQL build table (RegisterPGBuilds, D70).
+	PGBuilds bool `json:"pg_builds"`
 }
 
 // capsCacheFor is how long a positive "every member knows the mixed

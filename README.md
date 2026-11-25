@@ -6,7 +6,7 @@ is lost. Your apps connect as they always do.
 
 Website: https://coyotedb.com
 
-> **Version 0.1.0**, the first release. Test it with your own app before you
+> **Version 0.1.1.** Test it with your own app before you
 > trust it with data you cannot lose, and keep backups (they are on by default).
 
 ## What it is
@@ -26,7 +26,7 @@ Website: https://coyotedb.com
 
 The image is on Docker Hub as `coyotedb/coyote`, for 64-bit Intel/AMD
 (amd64) and ARM (arm64) hosts: Linux with Docker, or Docker Desktop on
-Windows and macOS (Apple silicon and Intel). Tags: `0.1.0` (this release; use the same version on every
+Windows and macOS (Apple silicon and Intel). Tags: `0.1.1` (this release; use the same version on every
 machine), `latest` (the newest release), `edge` (the main branch, not a release).
 
 First machine (replace `192.168.1.10` with an address of this machine that
@@ -36,7 +36,7 @@ the others can reach):
 docker run -d --name coyote --restart unless-stopped \
   --stop-timeout 120 --shm-size 256m \
   -p 7481:7481 -p 5432:5432 -v coyote-data:/data \
-  coyotedb/coyote:0.1.0 up --name node1 --advertise 192.168.1.10:7481
+  coyotedb/coyote:0.1.1 up --name node1 --advertise 192.168.1.10:7481
 
 docker exec coyote coyote invite     # one-time code for the next machine
 ```
@@ -48,7 +48,7 @@ docker run -d --name coyote --restart unless-stopped \
   --stop-timeout 120 --shm-size 256m \
   -p 7481:7481 -p 5432:5432 -v coyote-data:/data \
   -e COYOTE_INVITE=coyote-XXXX... \
-  coyotedb/coyote:0.1.0 join --name node2 --advertise 192.168.1.11:7481
+  coyotedb/coyote:0.1.1 join --name node2 --advertise 192.168.1.11:7481
 ```
 
 Then:

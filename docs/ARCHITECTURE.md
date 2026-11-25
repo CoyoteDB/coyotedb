@@ -158,6 +158,21 @@ the node warns under 1 GB free.
    and no Windows node is involved yet. The Raft state machine decides;
    see "Mixed operating systems" below. A node that stops matching (drift)
    never copies from, or takes over from, a node of another kind.
+   **PostgreSQL minor updates (D70), the only other exception:** while a
+   cluster is updated one computer at a time, data nodes on the same os
+   and arch may run two different builds of the same PostgreSQL major, and
+   only when both builds are in the cluster's Raft table of pinned builds
+   (`State.PGBuilds`: builds whose sha256 a member's own coyote pins,
+   written only once every member's program knows the table). A node's
+   record moves only forward (a newer minor); a joining data node must be
+   at or above the newest build recorded for any data node; a copy never
+   copies a main node whose build is a newer minor than the one the copy
+   runs (it stops its database and waits for its update); a planned
+   switch never makes a node the main node while another copy (not the
+   current main node) runs an older minor; a failover tie on WAL goes to
+   the older minor. An unpinned build, another major, os or arch, and a
+   downgrade are refused exactly as before; without the table the rule is
+   exactly as before.
 2. **Cut the stream before promoting.** A paused (not dead) primary cannot fence
    itself. Before promoting, clear `primary_conninfo` on at least N−k+1 standbys
    (as built, k is counted as 1, so all of them: D42),
@@ -380,7 +395,8 @@ both the CLI's control channel and the web dashboard (embedded from
 ## Mixed operating systems (D29, D37, D48, D49)
 
 Plan and evidence: `MIXED_OS.md`. Code: `internal/cluster/fsm.go`
-(`checkPlatform`), `internal/agent/{mixedos,builtinonly}.go`,
+(`checkPlatform`; PostgreSQL minor updates: `internal/cluster/pgbuilds.go`,
+`internal/agent/pgminor.go`, D70), `internal/agent/{mixedos,builtinonly}.go`,
 `internal/pg/{fingerprint,probe,portability,verify,builtinonly}.go`,
 `internal/pg/builtinonly.sql`.
 
@@ -508,13 +524,55 @@ during the roll:
 - **No downgrades.** A computer that ran the newer release is never started
   again on the older one.
 - **A PostgreSQL minor update changes `Platform.PGBuildSHA`** (rule 1
-  compares it). Open, must be fixed before the first release that changes
-  the pinned PostgreSQL (D69 "Open"): as built, an updated node's
-  `UpdateMember` is refused while the others' records hold the old build,
-  so every record keeps the old build, each updated data node reports
-  "database programs changed since it joined" (drift) for good, and a new
-  computer on the new release is refused at join. No write is lost and
-  the roll itself completes (tested 18.6.0 → 18.7.0).
+  compares it). Rule 1's minor-update exception (D70) records it:
+
+  - **Pinned builds in Raft.** `internal/pg` keeps every earlier pinned
+    release of the major (`earlierBuilds`, never downloaded) next to the
+    current one (`pg.KnownBuilds`). Each data node's guard loop adds the
+    builds its program pins for its own os/arch to `State.PGBuilds` with
+    `RegisterPGBuilds`, once every member answers the `caps` RPC with
+    `pg_builds` (an older member's strict decoder would halt on it). A
+    joining data node sends its own build's entry with the join; the
+    leader registers it before admitting (a computer on a newer release
+    names a build the members' programs do not know). Once the table
+    exists the leader refuses joiners below `JoinProtocol` 3.
+  - **The state machine decides** (`checkPlatform`, `checkPGLine`): a data
+    node not alike to another but on the same line (both builds in the
+    table, same major, os, arch: `State.SamePGLine`) matches it, with a
+    direction: a joiner must be at or above every same-line record, and a
+    member's record moves only forward. Going back to the build every
+    other data node has is "alike" and passes as before (undoing an
+    update). The decision reads only the state, so every member, of any
+    version that has the table, decides the same; while the table is
+    empty nothing is on a line and rule 1 is the original one.
+  - **A copy never copies a newer main node** (`minorFollowBlocked`): it
+    compares the build it runs (not its record, which moves only after
+    its database started) with the main node's record. When the main
+    node is newer it stops its database and waits, saying so, until it is
+    updated. This is the old main node's state between the switch and its
+    own update; nothing it holds is lost, and the cluster runs on the
+    other copies meanwhile (with one copy left, on its own, rule 9).
+  - **Switch and failover.** A planned switch is refused while a copy
+    other than the current main node runs an older minor than the target
+    (`minorSwitchBlocked`: "Update n3 first"). The other direction (a
+    target on an older minor than the current main node) is safe: the old
+    main node then copies an older one. `ChooseTarget` breaks a WAL tie
+    toward the older minor, so the remaining copies can follow; a higher
+    WAL end still always wins (rule 2).
+  - **A refused announcement is tried again** when the table grows, so a
+    roll that started with a member on a release without the table (no
+    table, old rule, records do not move and updated nodes warn) clears
+    by itself once the last member is updated: the table is written, each
+    updated node announces again, the warnings go.
+  - **Not covered:** a main node restarted in place on a newer minor while
+    copies run the older one (not the documented order): its copies stop
+    copying it as soon as its record moves, seconds after its database
+    started; in those seconds an older copy may receive its WAL, the case
+    PostgreSQL warns about. And a mixed-OS cluster (D37): its nodes'
+    fingerprints include the exact PostgreSQL version, so a minor update
+    there is still refused as drift, as before D70 (no write is lost; an
+    updated copy whose main node is another kind stops copying it and is
+    marked for a fresh copy, as for any drift).
 
 ## Moving a database in (M8, D47)
 

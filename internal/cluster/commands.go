@@ -52,6 +52,7 @@ var commandTypes = map[string]func() Command{
 	"set_app_password":     func() Command { return &SetAppPassword{} },
 	"promote":              func() Command { return &Promote{} },
 	"set_backup":           func() Command { return &SetBackup{} },
+	"register_pg_builds":   func() Command { return &RegisterPGBuilds{} },
 }
 
 // EncodeCommand serialises c for the Raft log.
