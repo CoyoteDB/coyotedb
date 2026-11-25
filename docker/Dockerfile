@@ -21,6 +21,9 @@ ARG BASE_IMAGE=debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a
 FROM --platform=${BUILDPLATFORM:-linux/amd64} ${GO_IMAGE} AS build
 ARG TARGETARCH
 ARG COYOTE_VERSION=dev
+# The image the program's Docker join commands name: a release sets its own
+# version tag (coyotedb/coyote:0.1.0) so every computer runs the same build.
+ARG COYOTE_IMAGE=coyotedb/coyote:edge
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
@@ -32,7 +35,7 @@ COPY docker/pgfetch ./docker/pgfetch
 # No cgo anywhere in coyote: one static binary, no libc dependency.
 RUN arch="${TARGETARCH:-$(go env GOARCH)}" \
  && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
-      -ldflags "-s -w -X main.version=${COYOTE_VERSION}" -o /out/coyote ./cmd/coyote \
+      -ldflags "-s -w -X main.version=${COYOTE_VERSION} -X coyotedb.com/coyote/internal/brand.DockerImage=${COYOTE_IMAGE}" -o /out/coyote ./cmd/coyote \
  && go build -trimpath -o /out/pgfetch ./docker/pgfetch \
  && echo "$arch" > /out/arch
 

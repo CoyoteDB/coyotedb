@@ -18,6 +18,10 @@ import (
 	"coyotedb.com/coyote/test/testports"
 )
 
+// dockerSetupLine is the Docker join command naming the image (edge, or a
+// release's own version: brand.DockerImage, set at build time).
+var dockerSetupLine = regexp.MustCompile(`coyotedb/coyote:[0-9a-z.-]+ setup`)
+
 // The setup page from Docker (D68): the container is started with
 // `setup` and no address, as docker/README.md "Easiest: the setup page"
 // says; the one-time sign-in link is read from `docker logs`, and the
@@ -259,7 +263,7 @@ func TestDockerWizard(t *testing.T) {
 	if code, b := p1.do("GET", "/v1/version", nil, &vi); code != 200 || vi.Container != "docker" {
 		t.Fatalf("version: %d %s", code, b)
 	}
-	if out := dockerT(t, time.Minute, "exec", n1.container(), "coyote", "invite"); !strings.Contains(out, "coyotedb/coyote:edge setup") || !strings.Contains(out, "COYOTE_INVITE=PASTE-THE-CODE") || strings.Contains(out, "run `coyote join`") {
+	if out := dockerT(t, time.Minute, "exec", n1.container(), "coyote", "invite"); !dockerSetupLine.MatchString(out) || !strings.Contains(out, "COYOTE_INVITE=PASTE-THE-CODE") || strings.Contains(out, "run `coyote join`") {
 		t.Fatalf("coyote invite in a container does not give the Docker commands")
 	}
 
@@ -280,7 +284,7 @@ func TestDockerWizard(t *testing.T) {
 		if code, _ := p1.do("POST", "/v1/invites", map[string]string{"role": role}, &inv); (code != 200 && code != 201) || inv.Code == "" {
 			t.Fatalf("invite from the panel: %d", code) // the body holds the code: not logged
 		}
-		if inv.Docker == nil || !strings.HasSuffix(inv.Docker.SetupCommand, "coyotedb/coyote:edge setup") || !strings.Contains(inv.Docker.CLICommand, " "+map[string]string{"data": "join", "witness": "witness"}[role]+" --name ") {
+		if inv.Docker == nil || !dockerSetupLine.MatchString(inv.Docker.SetupCommand) || !strings.Contains(inv.Docker.CLICommand, " "+map[string]string{"data": "join", "witness": "witness"}[role]+" --name ") {
 			t.Fatalf("invite from a container lacks the Docker join commands")
 		}
 		r.wizardStart(j, ctl[j.name])

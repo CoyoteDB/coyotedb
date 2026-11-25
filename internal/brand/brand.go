@@ -15,6 +15,11 @@ const (
 	DirNameLower = "coyote"
 	// EnvPrefix prefixes environment variables the program reads.
 	EnvPrefix = "COYOTE_"
-	// DockerImage is the published image people run (docker/README.md).
-	DockerImage = "coyotedb/coyote:edge"
 )
+
+// DockerImage is the image the Docker join commands name (docker/README.md).
+// A release image sets it to its own version at build time
+// (-X coyotedb.com/coyote/internal/brand.DockerImage=coyotedb/coyote:0.1.0,
+// docker/Dockerfile COYOTE_IMAGE), so every computer joins with the same
+// version; other builds name edge.
+var DockerImage = "coyotedb/coyote:edge"

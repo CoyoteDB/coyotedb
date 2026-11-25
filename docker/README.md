@@ -17,11 +17,12 @@ Linux (Intel/AMD) with Docker, Windows with Docker Desktop, and Apple
 silicon Macs with Docker Desktop:
 
 ```bash
-docker pull coyotedb/coyote:edge
+docker pull coyotedb/coyote:0.1.0
 ```
 
-`edge` follows the main branch; `sha-<commit>` tags pin one build. There is
-no `latest` tag until there is a release.
+Tags: `0.1.0` is the first release (use the same version on every machine),
+`latest` the newest release, `edge` the main branch (not a release), and
+`sha-<commit>` one fixed build.
 
 To build it yourself, from the repository root:
 
