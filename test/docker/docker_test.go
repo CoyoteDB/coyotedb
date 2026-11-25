@@ -97,7 +97,13 @@ func env(k, def string) string {
 // image returns the image under test, building it first unless told not to.
 func image(t *testing.T) string {
 	t.Helper()
-	img := env("COYOTE_DOCKER_IMAGE", "coyote-test/coyote:dev")
+	return buildImage(t, env("COYOTE_DOCKER_IMAGE", "coyote-test/coyote:dev"))
+}
+
+// buildImage builds img from the working tree (docker build --build-arg
+// for each of buildArgs, "KEY=value"), unless COYOTE_DOCKER_BUILD=0.
+func buildImage(t *testing.T, img string, buildArgs ...string) string {
+	t.Helper()
 	if os.Getenv("COYOTE_DOCKER_BUILD") == "0" {
 		dockerT(t, time.Minute, "image", "inspect", img)
 		return img
@@ -107,7 +113,11 @@ func image(t *testing.T) string {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "build", "-f", filepath.Join(src, "docker", "Dockerfile"), "-t", img, src)
+	args := []string{"build", "-f", filepath.Join(src, "docker", "Dockerfile"), "-t", img}
+	for _, a := range buildArgs {
+		args = append(args, "--build-arg", a)
+	}
+	cmd := exec.CommandContext(ctx, "docker", append(args, src)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("docker build: %v\n%s", err, tail(string(out), 40))
@@ -248,6 +258,12 @@ func (r *rig) dumpLogs() {
 // host's published ports as it does between machines.
 func (r *rig) start(n node, mode, code string) {
 	r.t.Helper()
+	r.startWith(r.img, n, mode, code)
+}
+
+// startWith is start with another image (TestDockerUpdate's new version).
+func (r *rig) startWith(img string, n node, mode, code string) {
+	r.t.Helper()
 	args := []string{"run", "-d", "--name", n.container(), "--hostname", n.name,
 		"--stop-timeout", "120", "--shm-size", "256m",
 		"--add-host", "host.docker.internal:host-gateway",
@@ -256,7 +272,7 @@ func (r *rig) start(n node, mode, code string) {
 	if !n.witness {
 		args = append(args, "-p", fmt.Sprintf("%s:%d:%d", r.bind, n.clientPort, n.clientPort))
 	}
-	args = append(args, r.img, mode)
+	args = append(args, img, mode)
 	if code != "" {
 		args = append(args, code)
 	}
@@ -278,7 +294,8 @@ type status struct {
 		LeaderName  string   `json:"leader_name"`
 		SyncSet     []string `json:"sync_set"`
 	} `json:"cluster"`
-	Nodes []struct {
+	Warnings []string `json:"warnings"`
+	Nodes    []struct {
 		Name        string `json:"name"`
 		Role        string `json:"role"`
 		Reachable   bool   `json:"reachable"`
@@ -544,80 +561,10 @@ func TestDockerFailover(t *testing.T) {
 
 	// 1. Form the cluster: up, then join x2 and a witness, each with its
 	// own one-time invite.
-	r.start(n1, "up", "")
-	d := r.waitHealthy(n1, "n1", nil, 5*time.Minute)
-	t.Logf("n1 is the main node after %s", d.Round(time.Second))
-	for _, j := range []node{n2, n3} {
-		r.start(j, "join", r.invite(n1))
-		d := r.waitHealthy(n1, "n1", []string{j.name}, 10*time.Minute)
-		t.Logf("%s joined and follows live after %s", j.name, d.Round(time.Second))
-	}
-	r.start(w, "witness", r.invite(n1))
-	waitFor(t, "witness in the cluster", 5*time.Minute, func() error {
-		s, err := r.status(n1)
-		if err != nil {
-			return err
-		}
-		if st, _ := s.state("w"); st != "witness" {
-			return fmt.Errorf("witness is %q", st)
-		}
-		return nil
-	})
-	r.waitHealthy(n1, "n1", []string{"n2", "n3"}, 5*time.Minute)
+	r.form()
 
-	// 2. The application side: password from conninfo, the CA copied out
-	// of a node, TLS verify-full against it.
-	ci := dockerT(t, time.Minute, "exec", n1.container(), "coyote", "conninfo", "--json")
-	var info struct {
-		User, Database, Password string
-		Hosts                    []string
-	}
-	if err := json.Unmarshal([]byte(ci), &info); err != nil || info.Password == "" {
-		t.Fatalf("conninfo: %v", err)
-	}
-	t.Logf("conninfo hosts (what applications on other machines use): %v", info.Hosts)
-	tmp := t.TempDir()
-	ca := filepath.Join(tmp, "ca.crt")
-	dockerT(t, time.Minute, "cp", n1.container()+":/data/coyote/ca.crt", ca)
-	var hosts []string
-	for _, n := range r.data() {
-		hosts = append(hosts, fmt.Sprintf("localhost:%d", n.clientPort))
-	}
-	cfg, err := pgx.ParseConfig(fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=verify-full&sslrootcert=%s&connect_timeout=5",
-		info.User, info.Password, strings.Join(hosts, ","), info.Database, filepath.ToSlash(ca)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The servers' certificates name "localhost"; the published ports
-	// listen on the bind address. Dial that, verify the name "localhost".
-	dial := env("COYOTE_DOCKER_DIAL", r.bind)
-	if net.ParseIP(dial) == nil {
-		addrs, err := net.DefaultResolver.LookupHost(context.Background(), dial)
-		if err != nil || len(addrs) == 0 {
-			t.Fatalf("COYOTE_DOCKER_DIAL %q: %v", dial, err)
-		}
-		dial = addrs[0]
-	}
-	cfg.LookupFunc = func(ctx context.Context, host string) ([]string, error) {
-		if host == "localhost" {
-			return []string{dial}, nil
-		}
-		return net.DefaultResolver.LookupHost(ctx, host)
-	}
-	{
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		c, err := pgx.ConnectConfig(ctx, cfg)
-		if err != nil {
-			cancel()
-			t.Fatalf("connect through the client ports: %v", err)
-		}
-		_, err = c.Exec(ctx, "CREATE TABLE dk (id bigint PRIMARY KEY, at timestamptz NOT NULL DEFAULT now())")
-		c.Close(ctx)
-		cancel()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+	// 2. The application side (see appConfig).
+	cfg := r.appConfig()
 	wr := startWriter(t, cfg)
 	writerStopped := false
 	defer func() {
@@ -640,7 +587,7 @@ func TestDockerFailover(t *testing.T) {
 		t.Fatalf("postmaster.pid first line %q", pmpid)
 	}
 	dockerT(t, time.Minute, "exec", n3.container(), "sh", "-c", "kill -9 "+pmpid) // kill is a shell builtin here
-	d = r.waitHealthy(n1, "n1", []string{"n2", "n3"}, 5*time.Minute)
+	d := r.waitHealthy(n1, "n1", []string{"n2", "n3"}, 5*time.Minute)
 	t.Logf("n3's postmaster (pid %s) killed: Postgres back and following live after %s", pmpid, d.Round(time.Second))
 	waitFor(t, "n3 orphans reaped", time.Minute, func() error {
 		out, err := docker(context.Background(), "exec", n3.container(), "sh", "-c", "grep -l '^[0-9]* (.*) Z' /proc/[0-9]*/stat 2>/dev/null || true")
@@ -778,12 +725,115 @@ func TestDockerFailover(t *testing.T) {
 	// 7. Stop writing and check every row.
 	wr.halt()
 	writerStopped = true
+	r.checkRows(wr, r.node(third))
+
+	// 8. PID 1 on every node after all of it.
+	for _, n := range r.nodes {
+		r.noZombies(n)
+	}
+}
+
+// form makes the cluster: n1 up, n2 and n3 join, then the witness, each
+// with its own one-time invite; it returns once n1 is the main node and
+// both copies follow live.
+func (r *rig) form() {
+	t := r.t
+	t.Helper()
+	n1, n2, n3, w := r.node("n1"), r.node("n2"), r.node("n3"), r.node("w")
+	r.start(n1, "up", "")
+	d := r.waitHealthy(n1, "n1", nil, 5*time.Minute)
+	t.Logf("n1 is the main node after %s", d.Round(time.Second))
+	for _, j := range []node{n2, n3} {
+		r.start(j, "join", r.invite(n1))
+		d := r.waitHealthy(n1, "n1", []string{j.name}, 10*time.Minute)
+		t.Logf("%s joined and follows live after %s", j.name, d.Round(time.Second))
+	}
+	r.start(w, "witness", r.invite(n1))
+	waitFor(t, "witness in the cluster", 5*time.Minute, func() error {
+		s, err := r.status(n1)
+		if err != nil {
+			return err
+		}
+		if st, _ := s.state("w"); st != "witness" {
+			return fmt.Errorf("witness is %q", st)
+		}
+		return nil
+	})
+	r.waitHealthy(n1, "n1", []string{"n2", "n3"}, 5*time.Minute)
+
+}
+
+// appConfig is the application side: password from conninfo, the CA
+// copied out of a node, TLS verify-full against it, every data node's
+// client port. It creates the table dk the writer fills.
+func (r *rig) appConfig() *pgx.ConnConfig {
+	t := r.t
+	t.Helper()
+	n1 := r.node("n1")
+	ci := dockerT(t, time.Minute, "exec", n1.container(), "coyote", "conninfo", "--json")
+	var info struct {
+		User, Database, Password string
+		Hosts                    []string
+	}
+	if err := json.Unmarshal([]byte(ci), &info); err != nil || info.Password == "" {
+		t.Fatalf("conninfo: %v", err)
+	}
+	t.Logf("conninfo hosts (what applications on other machines use): %v", info.Hosts)
+	tmp := t.TempDir()
+	ca := filepath.Join(tmp, "ca.crt")
+	dockerT(t, time.Minute, "cp", n1.container()+":/data/coyote/ca.crt", ca)
+	var hosts []string
+	for _, n := range r.data() {
+		hosts = append(hosts, fmt.Sprintf("localhost:%d", n.clientPort))
+	}
+	cfg, err := pgx.ParseConfig(fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=verify-full&sslrootcert=%s&connect_timeout=5",
+		info.User, info.Password, strings.Join(hosts, ","), info.Database, filepath.ToSlash(ca)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The servers' certificates name "localhost"; the published ports
+	// listen on the bind address. Dial that, verify the name "localhost".
+	dial := env("COYOTE_DOCKER_DIAL", r.bind)
+	if net.ParseIP(dial) == nil {
+		addrs, err := net.DefaultResolver.LookupHost(context.Background(), dial)
+		if err != nil || len(addrs) == 0 {
+			t.Fatalf("COYOTE_DOCKER_DIAL %q: %v", dial, err)
+		}
+		dial = addrs[0]
+	}
+	cfg.LookupFunc = func(ctx context.Context, host string) ([]string, error) {
+		if host == "localhost" {
+			return []string{dial}, nil
+		}
+		return net.DefaultResolver.LookupHost(ctx, host)
+	}
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		c, err := pgx.ConnectConfig(ctx, cfg)
+		if err != nil {
+			cancel()
+			t.Fatalf("connect through the client ports: %v", err)
+		}
+		_, err = c.Exec(ctx, "CREATE TABLE dk (id bigint PRIMARY KEY, at timestamptz NOT NULL DEFAULT now())")
+		c.Close(ctx)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return cfg
+}
+
+// checkRows checks, after the writer stopped, that every data node holds
+// identical rows and that every acknowledged row is on mainNode.
+func (r *rig) checkRows(wr *writer, mainNode node) {
+	t := r.t
+	t.Helper()
 	wr.mu.Lock()
 	okIDs, unknown, attempted := wr.ok, wr.unknown, wr.next
 	wr.mu.Unlock()
 	t.Logf("writes: %d acknowledged, %d unknown, %d attempted", len(okIDs), len(unknown), attempted)
 
-	mainNode := r.node(third)
 	var sum string
 	waitFor(t, "all data nodes hold identical rows", 5*time.Minute, func() error {
 		var sums []string
@@ -804,7 +854,7 @@ func TestDockerFailover(t *testing.T) {
 		}
 		return nil
 	})
-	t.Logf("all three data nodes: %s rows/hash", sum)
+	t.Logf("all %d data nodes: %s rows/hash", len(r.data()), sum)
 
 	out, err := r.admin(mainNode, "SELECT id FROM dk ORDER BY id")
 	if err != nil {
@@ -840,10 +890,6 @@ func TestDockerFailover(t *testing.T) {
 	}
 	t.Logf("no acknowledged row lost: all %d present on the main node %s", len(okIDs), mainNode.name)
 
-	// 8. PID 1 on every node after all of it.
-	for _, n := range r.nodes {
-		r.noZombies(n)
-	}
 }
 
 // TestDockerCompose brings up docker/docker-compose.yml (3 data nodes + a

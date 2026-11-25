@@ -176,6 +176,78 @@ docker compose -f docker/docker-compose.yml cp node1:/data/coyote/ca.crt .
 Apps on this machine connect to `localhost:5432`, `5433` or `5434`.
 Remove it all, data included: `docker compose -f docker/docker-compose.yml down -v`.
 
+## Updating to a new version
+
+A new CoyoteDB release (and with it a new PostgreSQL 18 minor version,
+which brings PostgreSQL's security fixes) goes on one machine at a time.
+The database stays up the whole time and no saved write is lost: the
+copies first, then a planned switch-over, then the old main machine. Our
+test does exactly this with writes running all the time
+(`TestDockerUpdate`, `docs/TESTING.md`).
+
+The release notes (`CHANGELOG.md`) say when a release needs anything more.
+Never go back to an older version on a machine that already ran the newer
+one.
+
+**0. Before you start.** Every machine healthy, and the new image on every
+machine (pulling takes the longest; do it first):
+
+```bash
+docker exec coyote coyote status          # main node, copies "following", no "!" lines
+docker pull coyotedb/coyote:0.1.1         # on every machine
+```
+
+(`0.1.1` stands for the new version's tag throughout.)
+
+**1. Each copy, one at a time.** On a machine that `coyote status` shows as
+a copy (not the main node):
+
+```bash
+docker stop coyote        # stops PostgreSQL cleanly (give it the time it needs)
+docker rm coyote          # the container only; the data stays in the volume
+docker run -d --name coyote ...same options and command as before... \
+  coyotedb/coyote:0.1.1 ...same command as before...
+```
+
+Use exactly the same `docker run` line as when you set the machine up (the
+same volume, ports, name and `--advertise`); only the image tag changes.
+`join` and `setup` need no invite code here: a volume that already joined
+just starts. Then wait until `docker exec coyote coyote status` shows this
+machine as a copy that is following again, before you go on to the next
+machine. That takes seconds when the copy was only briefly away.
+
+With only two database machines, writes wait while their one copy
+restarts (a few seconds) and then carry on. If it stays away longer than
+30 seconds, writes carry on saved on the main machine alone until the copy
+is back (`coyote status` says so); wait for it before step 3.
+
+**2. The witness**, if you have one: the same three commands on its
+machine (its own `docker run` line, `witness`, no client port).
+
+**3. Switch the main node to an updated copy.** On any machine:
+
+```bash
+docker exec coyote coyote switch --to node2      # a copy you already updated
+```
+
+The switch waits until that copy has every saved write, stops the old main
+node and only then lets the new one take writes. Apps see their
+connections closed once and reconnect; a new connection waits for the new
+main node instead of failing.
+
+**4. The old main machine,** now a copy: step 1 on it.
+
+**5. Check.** Every machine on the new version, and healthy:
+
+```bash
+docker exec coyote coyote version
+docker exec coyote coyote status
+```
+
+**One database machine only:** there is no copy to take over, so the
+database is down while the container restarts (seconds): `docker stop`,
+`docker rm`, `docker run` with the new tag. No saved write is lost.
+
 ## Things to know
 
 **The address (`--advertise`, or `COYOTE_ADVERTISE`) must be given** (the

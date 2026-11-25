@@ -477,6 +477,45 @@ Nothing in `internal/` knows it runs in a container.
   must still be a loopback name on that port, a session from a one-time
   link is required, the bearer token stays loopback-only.
 
+## Updating a cluster to a new release (D69)
+
+One computer at a time, the database up throughout: **the copies first,
+then the witness, then a planned switch-over (D41) to an updated copy,
+then the old main node.** Each computer: stop cleanly (`docker stop`,
+or stop the service), replace the program (the image tag), start it with
+the same data folder and command; wait until it is a following copy in R
+again before the next. Steps for people: `docker/README.md` "Updating to
+a new version". Proof: `TestDockerUpdate` (TESTING.md).
+
+Why this order: PostgreSQL's own rule for minor releases is standbys
+before the primary (a newer primary may write WAL an older standby cannot
+read); the switch moves the main role without a failover and without the
+lease wait; the old main node is then just a copy.
+
+Rules for every release, because a cluster runs two versions at once
+during the roll:
+
+- **Raft entries and snapshots are decoded strictly** (unknown fields are
+  an error, `DecodeCommand`); an older program that meets a newer field
+  halts its state machine. So a release may add a field to a Raft command
+  or to `State` only behind a capability every member has confirmed (the
+  `caps` RPC and `JoinProtocol` pattern of D37's mixed-system fields), and
+  never in a patch release unless gated that way.
+- **The state machine's apply logic must give the same answer on every
+  version in the cluster.** A command one version accepts and another
+  refuses splits the cluster state. A change to what `applyCommand` accepts
+  (for example `checkPlatform`) is gated like a new field.
+- **No downgrades.** A computer that ran the newer release is never started
+  again on the older one.
+- **A PostgreSQL minor update changes `Platform.PGBuildSHA`** (rule 1
+  compares it). Open, must be fixed before the first release that changes
+  the pinned PostgreSQL (D69 "Open"): as built, an updated node's
+  `UpdateMember` is refused while the others' records hold the old build,
+  so every record keeps the old build, each updated data node reports
+  "database programs changed since it joined" (drift) for good, and a new
+  computer on the new release is refused at join. No write is lost and
+  the roll itself completes (tested 18.6.0 → 18.7.0).
+
 ## Moving a database in (M8, D47)
 
 Code: `internal/migrate`, `cmd/coyote/migrate.go`. Guide: `MIGRATE.md`.

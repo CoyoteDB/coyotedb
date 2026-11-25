@@ -12,10 +12,11 @@
 # processor. The classic builder (Ubuntu's docker.io without docker-buildx)
 # has no BUILDPLATFORM/TARGETARCH; it then builds for the machine it runs on.
 
-# Base images, pinned by digest (checked 2026-11-21). Update tag and digest
-# together.
-ARG GO_IMAGE=golang:1.27.4-trixie@sha256:f18c3d73a184fb0582828510722e723b63a93f7188d11dd223d9be6f6880e65d
-ARG BASE_IMAGE=debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+# Base images, pinned by digest (checked 2026-11-25 with
+# scripts/security-check.sh, which says when they move). Update tag and
+# digest together.
+ARG GO_IMAGE=golang:1.27.4-trixie@sha256:430985542100b871e108ccc00e8dcc5eef08ca14ee5825e98ebf563d8ffec4ee
+ARG BASE_IMAGE=debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0
 
 # ---- 1. coyote and pgfetch, cross-compiled on the build machine --------
 FROM --platform=${BUILDPLATFORM:-linux/amd64} ${GO_IMAGE} AS build
@@ -81,6 +82,12 @@ COPY --from=build /out/coyote /usr/local/bin/coyote
 COPY --from=postgres /out/pg /opt/coyote/pg
 # The licence and the third-party notices travel with the program.
 COPY LICENSE NOTICE /usr/share/doc/coyote/
+# The PostgreSQL build must need nothing the image lacks (D46). A new build
+# can start to depend on a system library (the 18.6.0 build needed
+# libgssapi_krb5, libxml2, libreadline and more; 18.7.0 needs none): fail
+# here, not at the first initdb on someone's machine.
+RUN missing="$(for f in /opt/coyote/pg/current/bin/* /opt/coyote/pg/current/lib/*.so*; do ldd "$f" 2>/dev/null | grep 'not found'; done | sort -u)" \
+ && if [ -n "$missing" ]; then echo "The PostgreSQL build needs libraries this image does not have:"; echo "$missing"; exit 1; fi
 
 # /data/coyote is the node's data folder: Linux's per-user default
 # ($XDG_DATA_HOME/coyote), so `docker exec <c> coyote status` and every
