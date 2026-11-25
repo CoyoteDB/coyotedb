@@ -17,7 +17,7 @@
 
 There is no `latest` tag until the first release, so always give a tag.
 
-**Runs on:** 64-bit Intel/AMD computers (amd64): Linux with Docker, or Windows with Docker Desktop. Not on ARM yet (Raspberry Pi, Apple silicon Macs).
+**Runs on:** 64-bit Intel/AMD (amd64) and ARM (arm64), one image: Linux with Docker, Windows with Docker Desktop, or a Mac with Docker Desktop (Apple silicon or Intel). Tested on Linux (Intel/AMD), Windows and Apple silicon Macs.
 
 ## Easiest: the setup page
 

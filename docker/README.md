@@ -11,16 +11,17 @@ Design and reasons: D46 in `docs/DECISIONS.md`. Tests: `docs/TESTING.md`
 
 ## 1. Get the image
 
-The image is on Docker Hub as `coyotedb/coyote`, for 64-bit Intel/AMD
-(amd64) Linux hosts:
+The image is on Docker Hub as `coyotedb/coyote`, one image for 64-bit
+Intel/AMD (amd64) and ARM (arm64); Docker picks the right one. Tested on
+Linux (Intel/AMD) with Docker, Windows with Docker Desktop, and Apple
+silicon Macs with Docker Desktop:
 
 ```bash
 docker pull coyotedb/coyote:edge
 ```
 
 `edge` follows the main branch; `sha-<commit>` tags pin one build. There is
-no `latest` tag until there is a release. On an ARM machine (a Raspberry Pi
-4/5, an Apple silicon Mac with Docker Desktop), build it yourself for now.
+no `latest` tag until there is a release.
 
 To build it yourself, from the repository root:
 
