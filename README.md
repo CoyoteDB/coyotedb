@@ -26,7 +26,8 @@ Website: https://coyotedb.com
 ## Quick start with Docker
 
 The image is on Docker Hub as `coyotedb/coyote`, for 64-bit Intel/AMD
-(amd64) hosts. `edge` follows the main branch; `sha-<commit>` tags pin one
+(amd64) and ARM (arm64) hosts: Linux with Docker, or Docker Desktop on
+Windows and macOS (Apple silicon and Intel). `edge` follows the main branch; `sha-<commit>` tags pin one
 build. There is no `latest` tag until there is a release.
 
 First machine (replace `192.168.1.10` with an address of this machine that
